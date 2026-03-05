@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1072061801531",
+    "project_id": "cleargrow-chits-4815",
+    "storage_bucket": "cleargrow-chits-4815.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1072061801531:android:726c46cdc874dfab85e81e",
+        "android_client_info": {
+          "package_name": "com.example.cleargrowchits"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHPMIoY_NUbToRVhsepap9YIIHuNSnCUk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
