@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 class SchemeTheme {
   static const primaryBlue = Color(0xFF1E3A8A);
 }
@@ -135,8 +137,18 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        elevation: 0, backgroundColor: SchemeTheme.primaryBlue, foregroundColor: Colors.white,
+        elevation: 0,
+        backgroundColor: SchemeTheme.primaryBlue,
+        foregroundColor: Colors.white,
         title: Text(widget.kuriName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf_rounded),
+            onPressed: _generateMonthlyPDF, // <--- Add this
+            tooltip: "Generate Monthly Report",
+          ),
+          const SizedBox(width: 10),
+        ],
       ),
       body: Column(
         children: [
@@ -661,4 +673,161 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   Widget _buildPayButton(String id, String name, double amt, String sid) => ElevatedButton(onPressed: () {},
       style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size(40, 35)), child: const Text("PENDING", style: TextStyle(fontSize: 8, color: Colors.white)));
-}
+
+
+
+
+
+  Future<void> _generateMonthlyPDF() async {
+    final pdf = pw.Document();
+    final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: 'Rs.', decimalDigits: 0);
+    final dateStr = DateFormat('MMMM yyyy').format(selectedMonth);
+
+    // 1. Fetch Data
+    final schemesSnap = await FirebaseFirestore.instance.collection('schemes').where('kuriId', isEqualTo: widget.kuriId).get();
+    final schemesMap = {for (var doc in schemesSnap.docs) doc.id: doc.data()};
+    final paymentsSnap = await FirebaseFirestore.instance.collection('payments').where('kuriId', isEqualTo: widget.kuriId).get();
+    final allPayments = paymentsSnap.docs;
+
+    Map<String, Map<String, dynamic>> currentMonthPaidMap = {
+      for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
+        doc['memberId'].toString(): doc.data()
+    };
+
+    // Summary variables
+    double totalReceivedThisMonth = 0;
+    int paidCount = 0;
+    int pendingCount = 0;
+
+    final tableData = _allMembers.map((m) {
+      final mid = m.id;
+      final d = m.data() as Map<String, dynamic>;
+      final schemeId = d['schemeId']?.toString() ?? '';
+      final scheme = schemesMap[schemeId] ?? {};
+      final pMonth = currentMonthPaidMap[mid];
+      final isPaid = pMonth != null;
+
+      if (isPaid) {
+        paidCount++;
+        totalReceivedThisMonth += _parseNum(pMonth['amount']);
+      } else {
+        pendingCount++;
+      }
+
+      double mAmount = _parseNum(scheme['monthlyAmount']);
+      final mPayments = allPayments.where((p) => p['memberId'] == mid);
+      double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
+
+      final schemeWinners = scheme['winners'] as Map<String, dynamic>? ?? {};
+      String? wonMonthKey;
+      schemeWinners.forEach((k, v) { if (v == mid) wonMonthKey = k; });
+      int totalMonths = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
+      int expectedInst = wonMonthKey != null ? (schemeWinners.keys.toList().indexOf(wonMonthKey!) + 1) : totalMonths;
+      double balance = (mAmount * expectedInst) - totalPaid;
+
+      String status = "PENDING";
+      String details = "-";
+
+      if (isPaid && pMonth['paidDate'] != null) {
+        DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+        details = "${DateFormat('dd/MM').format(pDate)}\n${pMonth['collectedBy'] ?? ''}\n${pMonth['mode'] ?? ''}";
+
+        int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
+        int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
+        DateTime boundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59);
+
+        if (pDate.isBefore(DateTime(selectedMonth.year, selectedMonth.month, 1))) status = "Advance";
+        else if (drawDay != 0 && pDate.isBefore(boundary)) status = "On-Time";
+        else status = "Late";
+      }
+
+      return [
+        d['kuriNumber']?.toString() ?? "-",
+        d['name'].toString().toUpperCase(),
+        d['phone'] ?? "-",
+        scheme['schemeName']?.toString().toUpperCase() ?? "N/A",
+        currencyFormat.format(mAmount),
+        status.toUpperCase(),
+        details,
+        currencyFormat.format(totalPaid),
+        currencyFormat.format(balance < 0 ? 0 : balance),
+      ];
+    }).toList();
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 40, vertical: 30), // Increased horizontal margin reduces table width
+        header: (context) => pw.Header(
+          level: 0,
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(widget.kuriName.toUpperCase(), style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              pw.Text("Month: $dateStr", style: const pw.TextStyle(fontSize: 10)),
+            ],
+          ),
+        ),
+        build: (context) => [
+          pw.TableHelper.fromTextArray(
+            headers: ['K.NO', 'NAME', 'PHONE', 'SCHEME', 'MONTHLY', 'STATUS', 'DETAILS', 'PAID', 'BALANCE'],
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+            cellStyle: const pw.TextStyle(fontSize: 12),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+            // Reduced widths for a tighter look
+            columnWidths: {
+              0: const pw.FixedColumnWidth(25),
+              1: const pw.FixedColumnWidth(80),
+              2: const pw.FixedColumnWidth(80),
+              3: const pw.FixedColumnWidth(80),
+              4: const pw.FixedColumnWidth(80),
+              5: const pw.FixedColumnWidth(80),
+              6: const pw.FixedColumnWidth(80), // Details gets slightly more for the font
+              7: const pw.FixedColumnWidth(80),
+              8: const pw.FixedColumnWidth(80),
+            },
+            data: tableData,
+          ),
+          pw.SizedBox(height: 20),
+
+          // --- SUMMARY SECTION ---
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.grey400),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text("COLLECTION SUMMARY", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                pw.Divider(thickness: 0.5),
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    _summaryItem("Total Members", _allMembers.length.toString()),
+                    _summaryItem("Paid Members", paidCount.toString()),
+                    _summaryItem("Pending Members", pendingCount.toString()),
+                    _summaryItem("Current Month Collection", currencyFormat.format(totalReceivedThisMonth)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
+  }
+
+// Helper widget for summary items
+  pw.Widget _summaryItem(String title, String value) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(title, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+        pw.Text(value, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+      ],
+    );
+  }}
