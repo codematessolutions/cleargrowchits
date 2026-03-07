@@ -5,6 +5,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../core/utils/kuri_theme.dart';
+
 class ExpenseManagerWeb extends StatefulWidget {
   final String userId;
   final String userName;
@@ -54,7 +56,6 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
       backgroundColor: bgColor,
       body: Row(
         children: [
-          _buildSidebar(),
           Expanded(
             child: Column(
               children: [
@@ -424,6 +425,11 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
           border: Border(bottom: BorderSide(color: borderColor))
       ),
       child: Row(children: [
+        IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: KuriTheme.textDark),
+          padding: const EdgeInsets.only(right: 16), // Spacing between button and title
+        ),
         const Text("EXPENSE DASHBOARD", style: TextStyle(fontWeight: FontWeight.w800, color: sideBarColor)),
         const Spacer(),
         _buildDateNavigator(),
@@ -464,7 +470,6 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
     child: Row(children: [const Text("TOTAL"), const Spacer(), Text(currencyFormat.format(total), style: const TextStyle(fontWeight: FontWeight.w900, color: primaryBlue))]),
   );
 
-  Widget _buildSidebar() => Container(width: 80, color: sideBarColor, child: const Column(children: [SizedBox(height: 40), Icon(Icons.account_balance, color: Colors.white, size: 30), SizedBox(height: 40), Icon(Icons.dashboard, color: Colors.white54)]));
 
 
   Widget _buildTabStrip() => Container(color: Colors.white, child: TabBar(controller: _tabController, labelColor: primaryBlue, indicatorColor: primaryBlue, tabs: const [Tab(text: "OVERVIEW"), Tab(text: "KURI"), Tab(text: "COMPANY"), Tab(text: "STAFF")]));

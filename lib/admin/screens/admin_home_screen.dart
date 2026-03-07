@@ -203,7 +203,7 @@ class _AdminHomeState extends State<AdminHome> {
             _webActionCard("Expenses", "Track daily costs", Icons.wallet, Colors.redAccent,
                     () => Navigator.push(context, MaterialPageRoute(builder: (_) => ExpenseManagerWeb(userId: widget.userId, userName: widget.userName, userRole: widget.userRole)))),
             _webActionCard("Company", "Total Report", Icons.account_balance, Colors.greenAccent,
-                    () => Navigator.push(context, MaterialPageRoute(builder: (_) => CompanyGlobalAuditWeb( userName: widget.userName)))),
+                    () => Navigator.push(context, MaterialPageRoute(builder: (_) => CompanyGlobalAuditWeb( userName: widget.userName, userRole: widget.userRole,)))),
           ],
         ),
       ],
