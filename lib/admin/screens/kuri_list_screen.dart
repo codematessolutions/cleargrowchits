@@ -551,13 +551,37 @@ class _Header extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 40),
     decoration: const BoxDecoration(color: KuriTheme.surface, border: Border(bottom: BorderSide(color: KuriTheme.borderSubtle))),
     child: Row(children: [
-      const Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [Text("Kuri Administration", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: KuriTheme.textDark)), Text("Manage and monitor all active Kuri", style: TextStyle(color: KuriTheme.textMuted, fontSize: 13))]),
+      // --- BACK BUTTON ---
+      IconButton(
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: KuriTheme.textDark),
+        padding: const EdgeInsets.only(right: 16), // Spacing between button and title
+      ),
+
+      const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Kuri Administration",
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: KuriTheme.textDark)),
+            Text("Manage and monitor all active Kuri",
+                style: TextStyle(color: KuriTheme.textMuted, fontSize: 13))
+          ]
+      ),
+
       const Spacer(),
+
       ElevatedButton.icon(
           onPressed: () => _KuriFormDialog.show(context, userId: userId, userName: userName, userRole: userRole),
-          style: ElevatedButton.styleFrom(backgroundColor: KuriTheme.primaryIndigo, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          style: ElevatedButton.styleFrom(
+              backgroundColor: KuriTheme.primaryIndigo,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+          ),
           icon: const Icon(Icons.add, size: 20),
-          label: const Text("START NEW KURI"))
+          label: const Text("START NEW KURI")
+      )
     ]),
   );
 }
