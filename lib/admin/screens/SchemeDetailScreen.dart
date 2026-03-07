@@ -252,7 +252,6 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     final Map<String, List<DocumentSnapshot>> memberPaymentHistory = {};
     final Map<String, Map<String, dynamic>> currentMonthPaidMap = {};
 
-    // 1. Organize payment data for lookup
     for (var p in _allPayments) {
       final pData = p.data() as Map<String, dynamic>;
       final mid = pData['memberId'].toString();
@@ -261,139 +260,156 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     }
 
     final monthlyAmount = _parseNum(widget.schemeData['monthlyAmount'] ?? 0);
-    final int? totalInstCount = int.tryParse(widget.schemeData['totalMonths']?.toString() ?? '');
-    final safeInstCount = totalInstCount ?? 0;
-    final totalSchemeValue = monthlyAmount * safeInstCount;
+    final int totalMonths = int.tryParse(widget.schemeData['totalMonths']?.toString() ?? '0') ?? 0;
+
+    DateTime start = (widget.schemeData['startMonth'] is Timestamp) ? (widget.schemeData['startMonth'] as Timestamp).toDate() : DateTime.now();
+    final List<String> allMonthKeys = List.generate(totalMonths, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
 
     double grandTotalPaid = 0;
     double grandTotalBalance = 0;
 
-    // 2. Filtering Logic
     final filteredDocs = _allMembers.where((mDoc) {
       final d = mDoc.data() as Map<String, dynamic>;
       if (searchQuery.isNotEmpty) {
         String name = d['name'].toString().toLowerCase();
         String kuri = d['kuriNumber'].toString();
-        String target = searchQuery.toLowerCase();
-        if (!name.contains(target) && kuri != target) return false;
-      }
-      final isPaid = currentMonthPaidMap.containsKey(mDoc.id);
-      if (selectedStatus != "All") {
-        if (selectedStatus == "Paid" && !isPaid) return false;
-        if (selectedStatus == "Pending" && isPaid) return false;
+        if (!name.contains(searchQuery.toLowerCase()) && kuri != searchQuery) return false;
       }
       return true;
     }).toList();
 
-    // 3. Generate Table Rows
     final List<DataRow> tableRows = filteredDocs.map((m) {
       final mid = m.id;
       final d = m.data() as Map<String, dynamic>;
       final pMonth = currentMonthPaidMap[mid];
       final isPaid = pMonth != null;
       final mHistory = memberPaymentHistory[mid] ?? [];
-      bool isMonthWinner = (widget.schemeData['winners'] != null && widget.schemeData['winners'][monthKey] == mid);
 
-      // Calculations
+      // --- SAFE WINNER LOOKUP & LABEL LOGIC ---
+      final Map<String, dynamic> allWinners = widget.schemeData['winners'] != null
+          ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map)
+          : {};
+
+      String? wonMonthKey;
+      allWinners.forEach((key, value) { if (value.toString() == mid) wonMonthKey = key.toString(); });
+
+      bool isCurrentMonthWinner = wonMonthKey == monthKey;
+      bool hasWonInPast = false;
+      String winnerSubtitle = "";
+
+      if (wonMonthKey != null) {
+        try {
+          DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
+          if (winDate.isBefore(selectedMonth)) hasWonInPast = true;
+
+          // Calculate Ordinal (1st, 2nd...)
+          int winIdx = allMonthKeys.indexOf(wonMonthKey!);
+          int monthOrdinal = winIdx + 1;
+
+          String suffix = "th";
+          int digit = monthOrdinal % 10;
+          int lastTwo = monthOrdinal % 100;
+          if (digit == 1 && lastTwo != 11) suffix = "st";
+          else if (digit == 2 && lastTwo != 12) suffix = "nd";
+          else if (digit == 3 && lastTwo != 13) suffix = "rd";
+
+          winnerSubtitle = "$monthOrdinal$suffix Month Winner - ${DateFormat('MMMM yyyy').format(winDate)}";
+        } catch (e) { winnerSubtitle = "Winner"; }
+      }
+
+      // --- BALANCE LOGIC ---
+      int instOwed = totalMonths;
+      if (wonMonthKey != null) {
+        int idx = allMonthKeys.indexOf(wonMonthKey!);
+        instOwed = idx != -1 ? idx + 1 : totalMonths;
+      }
+
       final totalPaid = mHistory.fold<double>(0.0, (sum, p) => sum + _parseNum(p['amount']));
-      final balance = totalSchemeValue - totalPaid;
+      final balance = (monthlyAmount * instOwed) - totalPaid;
       grandTotalPaid += totalPaid;
-      grandTotalBalance += balance;
+      grandTotalBalance += (balance > 0 ? balance : 0);
 
-      // --- UPDATED STRICT STATUS LOGIC ---
-      Color statusBgColor = const Color(0xFFFEE2E2); // Default: Pending (Light Red)
+      // --- STATUS LOGIC ---
+      Color statusColor = const Color(0xFFFEE2E2);
       String statusLabel = "PENDING";
 
-      if (isPaid && pMonth['paidDate'] != null) {
-        DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
-
-        // Get Draw Day strictly from schemeData (Remove hardcoded fallback)
+      if (hasWonInPast) {
+        statusColor = const Color(0xFFEFF6FF);
+        statusLabel = "WON";
+      } else if (isCurrentMonthWinner) {
+        statusColor = Colors.amber.shade100;
+        statusLabel = "WINNER";
+      } else if (isPaid) {
+        DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
         int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '') ?? 0;
-        print(drawDay.toString()+"laaaaaaaaas");
         int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
+        DateTime deadline = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59);
 
-        DateTime monthStart = DateTime(selectedMonth.year, selectedMonth.month, 1);
-        DateTime lastPayBoundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
-
-        if (pDate.isBefore(monthStart)) {
-          statusBgColor = const Color(0xFFECD907); // Yellow
-          statusLabel = "Advance";
-        } else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) {
-          statusBgColor = const Color(0xFF54EA89); // Light Green
-          statusLabel = "On-Time";
+        if (pDate.isBefore(DateTime(selectedMonth.year, selectedMonth.month, 1))) {
+          statusColor = const Color(0xFFECD907); statusLabel = "Advance";
+        } else if (pDate.isBefore(deadline)) {
+          statusColor = const Color(0xFF54EA89); statusLabel = "On-Time";
         } else {
-          statusBgColor = const Color(0xFFFB923C); // Orange
-          statusLabel = "Late";
+          statusColor = const Color(0xFFFB923C); statusLabel = "Late";
         }
       }
 
       return DataRow(
-        color: isMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
+        color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
         cells: [
           DataCell(Text(d['kuriNumber']?.toString() ?? "-")),
-          DataCell(SizedBox(
-            width: 200,
-            child: Row(
-              children: [
-                if (isMonthWinner) const Icon(Icons.stars, color: Colors.orange, size: 18),
+
+          // --- NAME SECTION WITH SUBTITLE ---
+          DataCell(SizedBox(width: 220, child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Row(children: [
+                if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 14),
+                const SizedBox(width: 4),
                 Expanded(child: Text(d['name'].toString().toUpperCase(),
-                    style: TextStyle(fontWeight: isMonthWinner ? FontWeight.bold : FontWeight.normal, fontSize: 12))),
-                IconButton(
-                  icon: Icon(isMonthWinner ? Icons.emoji_events : Icons.emoji_events_outlined,
-                      size: 18, color: isMonthWinner ? Colors.orange : Colors.grey),
-                  onPressed: () => _confirmWinner(mid, d['name'], isPaid),
+                    style: TextStyle(fontSize: 10, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.normal))),
+                IconButton(icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined, size: 16, color: wonMonthKey != null ? Colors.orange : Colors.grey),
+                    onPressed: hasWonInPast ? null : () => _confirmWinner(mid, d['name'], isPaid))
+              ]),
+              if (wonMonthKey != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 18),
+                  child: Text(winnerSubtitle, style: const TextStyle(fontSize: 8, color: Colors.blue, fontWeight: FontWeight.bold)),
                 ),
-              ],
-            ),
-          )),
+            ],
+          ))),
+
           DataCell(Text(d['phone'] ?? "-")),
           DataCell(Text(d['place'] ?? "-")),
           DataCell(Text(currencyFormat.format(monthlyAmount))),
-          DataCell(Text("${mHistory.length}/${totalInstCount ?? '-'}")),
+          DataCell(Text("${mHistory.length}/$instOwed")),
           DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
-          DataCell(Text(currencyFormat.format(balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
-          DataCell(Container(
-            width: double.infinity, height: double.infinity, alignment: Alignment.center, color: statusBgColor,
-            child: isPaid
-                ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
-                : _buildPayButton(mid, d['name']),
-          )),
-          DataCell(Text(isPaid && pMonth['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate()) : "-")),
-          DataCell(Text(isPaid ? (pMonth['mode'] ?? "Cash") : "-", style: const TextStyle(fontSize: 11))),
-          DataCell(Text(isPaid ? (pMonth['collectedBy'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
+          DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
+
+          // --- STATUS SECTION ---
+          DataCell(Container(width: double.infinity, alignment: Alignment.center, color: statusColor,
+              child: (isPaid || hasWonInPast || isCurrentMonthWinner)
+                  ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
+                  : _buildPayButton(mid, d['name']))),
+
+          DataCell(Text(isPaid ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-")),
+          DataCell(Text(isPaid ? (pMonth!['mode'] ?? "Cash") : "-")),
+          DataCell(Text(isPaid ? (pMonth!['collectedBy'] ?? "-") : "-")),
           DataCell(_buildEntryInfoCell(isPaid, pMonth)),
         ],
       );
     }).toList();
 
-    if (tableRows.isNotEmpty) {
-      tableRows.add(_buildGrandTotalRow(grandTotalPaid, grandTotalBalance, currencyFormat));
-    }
+    if (tableRows.isNotEmpty) tableRows.add(_buildGrandTotalRow(grandTotalPaid, grandTotalBalance, currencyFormat));
 
-    return Expanded(
-      child: Scrollbar(
-        controller: _verticalScroll,
-        thumbVisibility: true,
-        child: SingleChildScrollView(
-          controller: _verticalScroll,
-          child: Column(
-            children: [
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  headingRowHeight: 45,
-                  dataRowMaxHeight: 55,
-                  headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
-                  columns: _buildTableColumns(),
-                  rows: tableRows,
-                ),
-              ),
-              if (_isLoadingMore) const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)),
-            ],
-          ),
-        ),
-      ),
-    );
+    return Expanded(child: SingleChildScrollView(scrollDirection: Axis.vertical, child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(
+      headingRowHeight: 45,
+      dataRowMaxHeight: 60,
+      headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
+      columns: _buildTableColumns(),
+      rows: tableRows,
+    ))));
   }
 
   // --- EXISTING UI COMPONENTS ---
@@ -702,13 +718,14 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       }
     }
 
-    // --- REPLACEMENT LOGIC CHECK ---
-    // Check if someone else is already the winner for this specific month
-    final existingWinners = widget.schemeData['winners'] as Map<String, dynamic>? ?? {};
-    bool isReplacement = existingWinners.containsKey(monthKey);
-    String oldWinnerId = existingWinners[monthKey] ?? "";
+    // --- SAFE MAP CASTING ---
+    final Map<String, dynamic> existingWinners = widget.schemeData['winners'] != null
+        ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map)
+        : {};
 
-    // If the clicked member is ALREADY the winner, just show a message and return
+    bool isReplacement = existingWinners.containsKey(monthKey);
+    String oldWinnerId = existingWinners[monthKey]?.toString() ?? "";
+
     if (isReplacement && oldWinnerId == memberId) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("This member is already the winner for this month."))
@@ -725,14 +742,10 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))
-            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // --- Top Banner (Red for Replace, Orange for New) ---
               Container(
                 height: 140,
                 width: double.infinity,
@@ -741,147 +754,68 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                   borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
                 ),
                 child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: isReplacement ? Colors.red.shade100 : Colors.orange.shade100,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                        isReplacement ? Icons.published_with_changes_rounded : Icons.emoji_events_rounded,
-                        size: 60,
-                        color: isReplacement ? Colors.red.shade800 : Colors.orange.shade800
-                    ),
+                  child: Icon(
+                      isReplacement ? Icons.published_with_changes_rounded : Icons.emoji_events_rounded,
+                      size: 60,
+                      color: isReplacement ? Colors.red.shade800 : Colors.orange.shade800
                   ),
                 ),
               ),
-
               Padding(
-                padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
+                padding: const EdgeInsets.all(32),
                 child: Column(
                   children: [
-                    Text(
-                      isReplacement ? "REPLACE MONTHLY WINNER" : "CONFIRM MONTHLY WINNER",
-                      style: TextStyle(
-                        letterSpacing: 1.2,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: isReplacement ? Colors.red.shade800 : Colors.orange.shade800,
-                      ),
-                    ),
+                    Text(isReplacement ? "REPLACE WINNER" : "CONFIRM WINNER",
+                        style: TextStyle(fontWeight: FontWeight.bold, color: isReplacement ? Colors.red : Colors.orange)),
                     const SizedBox(height: 16),
-                    Text(
-                      name.toUpperCase(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF1A1A1A)),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      "Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}",
-                      style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
-                    ),
-
-                    // --- Warning Note for Replacement ---
-                    if (isReplacement) ...[
-                      const SizedBox(height: 20),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.red.shade100),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded, color: Colors.red.shade800, size: 20),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Text(
-                                "A winner already exists for this month. Confirming will replace the previous winner.",
-                                style: TextStyle(color: Color(0xFFB71C1C), fontSize: 12, fontWeight: FontWeight.w500),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                    Text(name.toUpperCase(), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                    Text("Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}"),
                   ],
                 ),
               ),
-
-              // --- Action Buttons ---
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24)),
-                ),
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24))),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: TextButton(
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 20),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text("CANCEL", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
+                    Expanded(child: TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL"))),
                     const SizedBox(width: 16),
                     Expanded(
                       child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isReplacement ? Colors.red.shade800 : Colors.orange.shade800,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 20),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
+                        style: ElevatedButton.styleFrom(backgroundColor: isReplacement ? Colors.red.shade800 : Colors.orange.shade800),
                         onPressed: () async {
                           try {
                             final batch = FirebaseFirestore.instance.batch();
                             final schemeRef = FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId);
                             final winnerDocId = "${widget.schemeId}_$monthKey";
                             final winnerRef = FirebaseFirestore.instance.collection('winners').doc(winnerDocId);
-                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
 
                             Map<String, dynamic> winnerData = {
                               'schemeId': widget.schemeId,
-                              'schemeName': widget.schemeData['schemeName'],
                               'monthKey': monthKey,
                               'memberId': memberId,
                               'memberName': name,
                               'updatedAt': FieldValue.serverTimestamp(),
-                              'updatedBy': widget.userName,
                               'isReplacement': isReplacement,
-                              'oldWinnerId': oldWinnerId,
                             };
 
-                            // --- Batch Commit ---
                             batch.update(schemeRef, {'winners.$monthKey': memberId});
                             batch.set(winnerRef, winnerData);
-                            batch.set(logRef, { ...winnerData, 'action': isReplacement ? 'REPLACED' : 'ASSIGNED' });
-
                             await batch.commit();
 
                             setState(() {
-                              widget.schemeData['winners'] ??= {};
-                              widget.schemeData['winners'][monthKey] = memberId;
+                              // Safe local update
+                              var winners = widget.schemeData['winners'] != null
+                                  ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map)
+                                  : <String, dynamic>{};
+                              winners[monthKey] = memberId;
+                              widget.schemeData['winners'] = winners;
                             });
 
                             if (context.mounted) Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(isReplacement ? "Winner replaced & logged!" : "Winner assigned & logged!"))
-                            );
-                          } catch (e) {
-                            debugPrint("Winner Error: $e");
-                          }
+                          } catch (e) { print("Error: $e"); }
                         },
-                        child: Text(
-                            isReplacement ? "CONFIRM REPLACE" : "CONFIRM WINNER",
-                            style: const TextStyle(fontWeight: FontWeight.bold)
-                        ),
+                        child: Text(isReplacement ? "CONFIRM REPLACE" : "CONFIRM", style: const TextStyle(color: Colors.white)),
                       ),
                     ),
                   ],

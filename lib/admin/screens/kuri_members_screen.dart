@@ -360,10 +360,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               return true;
             }).toList();
 
-            if (filteredMembers.length < 5 && _hasMore && !_isLoadingMore && (selectedStatus != "All" || searchQuery.isNotEmpty)) {
-              WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _fetchMembers(); });
-            }
-
             double grandTotalPaid = 0;
             double grandTotalBalance = 0;
 
@@ -375,95 +371,140 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               final isPaid = currentMonthPaidMap.containsKey(mid);
               final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
 
-              // --- WINNER LOGIC ---
-              final schemeWinners = scheme['winners'] as Map<String, dynamic>? ?? {};
+              // --- SAFE WINNER LOGIC ---
+              final Map<String, dynamic> schemeWinners = scheme['winners'] != null
+                  ? Map<String, dynamic>.from(scheme['winners'] as Map)
+                  : {};
+
               String? wonMonthKey;
-              schemeWinners.forEach((key, value) { if (value == mid) wonMonthKey = key; });
+              schemeWinners.forEach((key, value) { if (value.toString() == mid) wonMonthKey = key.toString(); });
+
               bool isCurrentMonthWinner = wonMonthKey == monthKey;
               bool hasWonInPast = false;
-              if (wonMonthKey != null && !isCurrentMonthWinner) {
+              String winnerSubtitle = "";
+
+              if (wonMonthKey != null) {
                 try {
                   DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
-                  if (winDate.isBefore(selectedMonth)) hasWonInPast = true;
-                } catch (e) { hasWonInPast = true; }
+                  if (!isCurrentMonthWinner && winDate.isBefore(selectedMonth)) hasWonInPast = true;
+
+                  // --- CALCULATE ORDINAL (1st, 2nd, etc) ---
+                  DateTime start = (scheme['startMonth'] is Timestamp)
+                      ? (scheme['startMonth'] as Timestamp).toDate()
+                      : winDate;
+
+                  int monthDiff = ((winDate.year - start.year) * 12) + winDate.month - start.month;
+                  int monthOrdinal = monthDiff + 1;
+
+                  String suffix = "th";
+                  int digit = monthOrdinal % 10;
+                  int lastTwo = monthOrdinal % 100;
+                  if (digit == 1 && lastTwo != 11) suffix = "st";
+                  else if (digit == 2 && lastTwo != 12) suffix = "nd";
+                  else if (digit == 3 && lastTwo != 13) suffix = "rd";
+
+                  // Label for the Name Section Subtitle
+                  winnerSubtitle = "$monthOrdinal$suffix Month Winner - ${DateFormat('MMMM yyyy').format(winDate)}";
+                } catch (e) {
+                  winnerSubtitle = "Winner";
+                }
               }
 
-              // --- CALCULATIONS ---
+              // --- CALCULATIONS (WON LOGIC) ---
               double monthlyAmount = _parseNum(scheme['monthlyAmount']);
-              final int? totalInstCountFromDb = int.tryParse(scheme['totalMonths']?.toString() ?? '');
-              int? expectedInst = wonMonthKey != null ? (schemeWinners.keys.toList().indexOf(wonMonthKey!) + 1) : totalInstCountFromDb;
+              final int totalInstCountFromDb = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
+              int expectedInst = totalInstCountFromDb;
+
+              if (wonMonthKey != null) {
+                DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
+                List<String> keys = List.generate(totalInstCountFromDb, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
+                int winIdx = keys.indexOf(wonMonthKey!);
+                expectedInst = (winIdx != -1) ? (winIdx + 1) : totalInstCountFromDb;
+              }
+
               final mPayments = allPayments.where((p) => p['memberId'] == mid);
               double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
-              double balance = (expectedInst != null) ? (monthlyAmount * expectedInst) - totalPaid : 0;
+              double balance = (monthlyAmount * expectedInst) - totalPaid;
               if (balance < 0) balance = 0;
 
               grandTotalPaid += totalPaid;
               grandTotalBalance += balance;
 
               // --- STRICT STATUS & COLOR LOGIC ---
-              Color statusBgColor = const Color(0xFFFEE2E2); // Default: Pending (Light Red)
+              Color statusBgColor = const Color(0xFFFEE2E2);
               String statusLabel = "PENDING";
 
-              if (isPaid && pMonth?['paidDate'] != null) {
+              if (hasWonInPast) {
+                statusBgColor = const Color(0xFFEFF6FF); // Blue
+                statusLabel = "WON";
+              } else if (isCurrentMonthWinner) {
+                statusBgColor = Colors.amber.shade100; // Gold
+                statusLabel = "WINNER";
+              } else if (isPaid && pMonth?['paidDate'] != null) {
                 DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
-
-                // Get Draw Day strictly from DB
                 int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
                 int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
-
                 DateTime monthStart = DateTime(selectedMonth.year, selectedMonth.month, 1);
                 DateTime lastPayBoundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
 
-                if (pDate.isBefore(monthStart)) {
-                  statusBgColor = const Color(0xFFECD907); // Yellow
-                  statusLabel = "Advance";
-                } else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) {
-                  statusBgColor = const Color(0xFF54EA89);
-                  statusLabel = "On-Time";
-                } else {
-                  statusBgColor =  const Color(0xFFFB923C); // Orange
-                  statusLabel = "Late";
-                }
-              } else if (hasWonInPast) {
-                statusBgColor = const Color(0xFFEFF6FF); // Blue
-                statusLabel = "WON";
+                if (pDate.isBefore(monthStart)) { statusBgColor = const Color(0xFFECD907); statusLabel = "Advance"; }
+                else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) { statusBgColor = const Color(0xFF54EA89); statusLabel = "On-Time"; }
+                else { statusBgColor = const Color(0xFFFB923C); statusLabel = "Late"; }
               }
 
               return DataRow(
                 color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
                 cells: [
                   DataCell(Text(d['kuriNumber']?.toString() ?? "-")),
-                  DataCell(SizedBox(width: 180, child: Row(children: [
-                    if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 16),
-                    Expanded(child: Text(d['name'].toString().toUpperCase(), style: TextStyle(fontSize: 11, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.normal))),
-                    IconButton(icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined, size: 16, color: wonMonthKey != null ? Colors.orange : Colors.grey), onPressed: hasWonInPast ? null : () => _confirmWinner(mid, d['name'], isPaid, schemeId, scheme))
-                  ]))),
-                  DataCell(Text(d['phone'] ?? "-")),
+
+                  // --- NAME SECTION WITH SUBTITLE ---
+                  DataCell(SizedBox(width: 200, child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(children: [
+                        if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 14),
+                        const SizedBox(width: 4),
+                        Expanded(child: Text(d['name'].toString().toUpperCase(),
+                            style: TextStyle(fontSize: 10, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.normal))),
+                      ]),
+                      if (wonMonthKey != null)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 18),
+                          child: Text(winnerSubtitle, style: const TextStyle(fontSize: 8, color: Colors.blue, fontWeight: FontWeight.w600)),
+                        ),
+                    ],
+                  ))),
+
+                  DataCell(Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 11))),
                   DataCell(Text(scheme['schemeName']?.toString().toUpperCase() ?? "N/A", style: const TextStyle(fontSize: 9))),
                   DataCell(Text(currencyFormat.format(monthlyAmount))),
-                  DataCell(Text("${mPayments.length} / ${totalInstCountFromDb ?? '-'}")),
+                  DataCell(Text("${mPayments.length} / $expectedInst")),
                   DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
                   DataCell(Text(currencyFormat.format(balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
+
+                  // --- STATUS SECTION (WON / WINNER / PENDING) ---
                   DataCell(Container(
                     width: double.infinity,
-                    height: double.infinity,
                     alignment: Alignment.center,
                     color: statusBgColor,
-                    child: isPaid || hasWonInPast
+                    child: (isPaid || hasWonInPast || isCurrentMonthWinner)
                         ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
                         : _buildPayButton(mid, d['name'], monthlyAmount, schemeId),
                   )),
+
                   DataCell(Text(isPaid && pMonth?['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-")),
-                  DataCell(Text(isPaid ? (pMonth?['mode'] ?? "Cash") : "-")),
-                  DataCell(Text(isPaid ? (pMonth?['collectedBy'] ?? "-") : "-")),
-                  DataCell(Text(isPaid ? (pMonth?['addedByName'] ?? "-") : "-")),
+                  DataCell(Text(isPaid ? (pMonth?['mode'] ?? "Cash") : "-", style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(isPaid ? (pMonth?['collectedBy'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
+                  DataCell(Text(isPaid ? (pMonth?['addedByName'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
                 ],
               );
             }).toList();
 
             if (rows.isNotEmpty) {
               rows.add(DataRow(color: WidgetStateProperty.all(Colors.grey[100]), cells: [
-                const DataCell(Text("")), const DataCell(Text("GRAND TOTAL", style: TextStyle(fontWeight: FontWeight.bold))),
+                const DataCell(Text("")),
+                const DataCell(Text("GRAND TOTAL", style: TextStyle(fontWeight: FontWeight.bold))),
                 const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")),
                 DataCell(Text(currencyFormat.format(grandTotalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
                 DataCell(Text(currencyFormat.format(grandTotalBalance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
@@ -472,12 +513,28 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             }
 
             return Expanded(child: Column(children: [
-              Expanded(child: Scrollbar(controller: _verticalScroll, child: SingleChildScrollView(controller: _verticalScroll, child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(headingRowHeight: 45, dataRowMaxHeight: 60, headingRowColor: WidgetStateProperty.all(Colors.grey.shade200), border: TableBorder.all(color: Colors.grey.shade300, width: 0.5), columns: const [
-                DataColumn(label: Text("K.NO")), DataColumn(label: Text("NAME / WINNER")), DataColumn(label: Text("PHONE")),
-                DataColumn(label: Text("SCHEME")), DataColumn(label: Text("MONTHLY")), DataColumn(label: Text("INST")),
-                DataColumn(label: Text("PAID")), DataColumn(label: Text("BAL")), DataColumn(label: Text("STATUS")),
-                DataColumn(label: Text("DATE")), DataColumn(label: Text("MODE")), DataColumn(label: Text("COLLECTOR")), DataColumn(label: Text("ENTRY")),
-              ], rows: rows))))),
+              Expanded(child: Scrollbar(
+                  controller: _verticalScroll,
+                  child: SingleChildScrollView(
+                      controller: _verticalScroll,
+                      child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: DataTable(
+                              headingRowHeight: 45,
+                              dataRowMaxHeight: 60,
+                              headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
+                              border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
+                              columns: const [
+                                DataColumn(label: Text("K.NO")), DataColumn(label: Text("NAME / WINNER")), DataColumn(label: Text("PHONE")),
+                                DataColumn(label: Text("SCHEME")), DataColumn(label: Text("MONTHLY")), DataColumn(label: Text("INST")),
+                                DataColumn(label: Text("PAID")), DataColumn(label: Text("BAL")), DataColumn(label: Text("STATUS")),
+                                DataColumn(label: Text("DATE")), DataColumn(label: Text("MODE")), DataColumn(label: Text("COLLECTOR")), DataColumn(label: Text("ENTRY")),
+                              ],
+                              rows: rows
+                          )
+                      )
+                  )
+              )),
               if (_isLoadingMore) const LinearProgressIndicator(),
             ]));
           },
@@ -685,20 +742,20 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
     // 1. Fetch Data
     final schemesSnap = await FirebaseFirestore.instance.collection('schemes').where('kuriId', isEqualTo: widget.kuriId).get();
-    final schemesMap = {for (var doc in schemesSnap.docs) doc.id: doc.data()};
+    final schemesMap = {for (var doc in schemesSnap.docs) doc.id: doc.data() as Map<String, dynamic>};
     final paymentsSnap = await FirebaseFirestore.instance.collection('payments').where('kuriId', isEqualTo: widget.kuriId).get();
     final allPayments = paymentsSnap.docs;
 
     Map<String, Map<String, dynamic>> currentMonthPaidMap = {
       for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
-        doc['memberId'].toString(): doc.data()
+        doc['memberId'].toString(): doc.data() as Map<String, dynamic>
     };
 
-    // Summary variables
     double totalReceivedThisMonth = 0;
     int paidCount = 0;
     int pendingCount = 0;
 
+    // 2. Map Member Data to Table Rows
     final tableData = _allMembers.map((m) {
       final mid = m.id;
       final d = m.data() as Map<String, dynamic>;
@@ -714,21 +771,65 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         pendingCount++;
       }
 
+      final Map<String, dynamic> schemeWinners = scheme['winners'] != null
+          ? Map<String, dynamic>.from(scheme['winners'] as Map)
+          : {};
+
+      String? wonMonthKey;
+      schemeWinners.forEach((k, v) { if (v.toString() == mid) wonMonthKey = k.toString(); });
+
+      bool isCurrentMonthWinner = wonMonthKey == monthKey;
+      bool hasWonInPast = false;
+      if (wonMonthKey != null && !isCurrentMonthWinner) {
+        try {
+          DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
+          if (winDate.isBefore(selectedMonth)) hasWonInPast = true;
+        } catch (e) { hasWonInPast = true; }
+      }
+
       double mAmount = _parseNum(scheme['monthlyAmount']);
+      int totalMonths = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
+
+      int expectedInst = totalMonths;
+      String winnerFullLabel = "";
+
+      if (wonMonthKey != null) {
+        DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
+        List<String> keys = List.generate(totalMonths, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
+        int winIdx = keys.indexOf(wonMonthKey!);
+        expectedInst = (winIdx != -1) ? (winIdx + 1) : totalMonths;
+
+        // Format Month & Year from wonMonthKey
+        DateTime winDateObj = DateFormat('yyyy_MM').parse(wonMonthKey!);
+        String winMonthYear = DateFormat('MMMM yyyy').format(winDateObj);
+
+        // Suffix Logic (st, nd, rd, th)
+        String suffix = "th";
+        int digit = expectedInst % 10;
+        int lastTwo = expectedInst % 100;
+        if (digit == 1 && lastTwo != 11) suffix = "st";
+        else if (digit == 2 && lastTwo != 12) suffix = "nd";
+        else if (digit == 3 && lastTwo != 13) suffix = "rd";
+
+        winnerFullLabel = "$expectedInst$suffix Month Winner - $winMonthYear";
+      }
+
       final mPayments = allPayments.where((p) => p['memberId'] == mid);
       double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
-
-      final schemeWinners = scheme['winners'] as Map<String, dynamic>? ?? {};
-      String? wonMonthKey;
-      schemeWinners.forEach((k, v) { if (v == mid) wonMonthKey = k; });
-      int totalMonths = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
-      int expectedInst = wonMonthKey != null ? (schemeWinners.keys.toList().indexOf(wonMonthKey!) + 1) : totalMonths;
       double balance = (mAmount * expectedInst) - totalPaid;
 
+      // --- STATUS & DETAILS LOGIC ---
       String status = "PENDING";
       String details = "-";
 
-      if (isPaid && pMonth['paidDate'] != null) {
+      if (wonMonthKey != null) {
+        details = winnerFullLabel;
+        if (hasWonInPast) {
+          status = "WON";
+        } else if (isCurrentMonthWinner) {
+          status = "WINNER";
+        }
+      } else if (isPaid && pMonth['paidDate'] != null) {
         DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
         details = "${DateFormat('dd/MM').format(pDate)}\n${pMonth['collectedBy'] ?? ''}\n${pMonth['mode'] ?? ''}";
 
@@ -754,66 +855,48 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       ];
     }).toList();
 
+    // 3. Generate PDF Document
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
-        margin: const pw.EdgeInsets.symmetric(horizontal: 40, vertical: 30), // Increased horizontal margin reduces table width
+        margin: const pw.EdgeInsets.symmetric(horizontal: 30, vertical: 30),
         header: (context) => pw.Header(
           level: 0,
           child: pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Text(widget.kuriName.toUpperCase(), style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-              pw.Text("Month: $dateStr", style: const pw.TextStyle(fontSize: 10)),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(widget.kuriName.toUpperCase(), style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                  pw.Text("Monthly Collection Report", style: const pw.TextStyle(fontSize: 10)),
+                ],
+              ),
+              pw.Text("Month: $dateStr", style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
             ],
           ),
         ),
         build: (context) => [
           pw.TableHelper.fromTextArray(
             headers: ['K.NO', 'NAME', 'PHONE', 'SCHEME', 'MONTHLY', 'STATUS', 'DETAILS', 'PAID', 'BALANCE'],
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-            cellStyle: const pw.TextStyle(fontSize: 12),
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+            cellStyle: const pw.TextStyle(fontSize: 8),
             headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-            // Reduced widths for a tighter look
             columnWidths: {
               0: const pw.FixedColumnWidth(25),
-              1: const pw.FixedColumnWidth(80),
-              2: const pw.FixedColumnWidth(80),
-              3: const pw.FixedColumnWidth(80),
-              4: const pw.FixedColumnWidth(80),
-              5: const pw.FixedColumnWidth(80),
-              6: const pw.FixedColumnWidth(80), // Details gets slightly more for the font
-              7: const pw.FixedColumnWidth(80),
-              8: const pw.FixedColumnWidth(80),
+              1: const pw.FixedColumnWidth(90),
+              2: const pw.FixedColumnWidth(70),
+              3: const pw.FixedColumnWidth(70),
+              4: const pw.FixedColumnWidth(60),
+              5: const pw.FixedColumnWidth(60),
+              6: const pw.FixedColumnWidth(120), // Increased width for the long winner label
+              7: const pw.FixedColumnWidth(60),
+              8: const pw.FixedColumnWidth(60),
             },
             data: tableData,
           ),
           pw.SizedBox(height: 20),
-
-          // --- SUMMARY SECTION ---
-          pw.Container(
-            padding: const pw.EdgeInsets.all(10),
-            decoration: pw.BoxDecoration(
-              border: pw.Border.all(color: PdfColors.grey400),
-              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-            ),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text("COLLECTION SUMMARY", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-                pw.Divider(thickness: 0.5),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    _summaryItem("Total Members", _allMembers.length.toString()),
-                    _summaryItem("Paid Members", paidCount.toString()),
-                    _summaryItem("Pending Members", pendingCount.toString()),
-                    _summaryItem("Current Month Collection", currencyFormat.format(totalReceivedThisMonth)),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          _buildPdfSummary(currencyFormat, totalReceivedThisMonth, paidCount, pendingCount),
         ],
       ),
     );
@@ -821,13 +904,45 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
   }
 
-// Helper widget for summary items
-  pw.Widget _summaryItem(String title, String value) {
+// --- PDF HELPER WIDGETS ---
+
+  pw.Widget _buildPdfSummary(NumberFormat currencyFormat, double totalReceived, int paid, int pending) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey400),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text("COLLECTION SUMMARY", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900)),
+          pw.Divider(thickness: 0.5, color: PdfColors.grey400),
+          pw.SizedBox(height: 5),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              _pdfSummaryItem("Total Members", _allMembers.length.toString()),
+              _pdfSummaryItem("Paid Members", paid.toString()),
+              _pdfSummaryItem("Pending Members", pending.toString()),
+              _pdfSummaryItem("Collection (Month)", currencyFormat.format(totalReceived)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _pdfSummaryItem(String label, String value) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Text(title, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
-        pw.Text(value, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+        pw.Text(label, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+        pw.SizedBox(height: 2),
+        pw.Text(value, style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
       ],
     );
-  }}
+  }
+
+
+}
