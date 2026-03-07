@@ -560,6 +560,7 @@ class _AddSchemeDialogState extends State<AddSchemeDialog> {
       await FirebaseFirestore.instance.collection('schemes').add({
         'kuriId': widget.kuriId,
         'kuriName': widget.kuriName,
+        'kuriDate': widget.kuriData["kuriDate"],
         'schemeName': _nameCtrl.text.trim(),
         'monthlyAmount': double.parse(_amtCtrl.text),
         'moop': double.parse(_moopCtrl.text),

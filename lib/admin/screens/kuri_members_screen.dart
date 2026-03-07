@@ -2,8 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 
 class SchemeTheme {
   static const primaryBlue = Color(0xFF1E3A8A);
@@ -74,6 +72,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   // --- CORE FETCH LOGIC ---
   Future<void> _fetchMembers({bool isInitial = false}) async {
+    print("dddddd"+isInitial.toString());
     if (isInitial) {
       setState(() {
         _isLoading = true;
@@ -91,7 +90,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
           .collection('members')
           .where('kuriId', isEqualTo: widget.kuriId);
 
-      // 1. Search Logic & Correct Ordering (Fixed Sort for Name Search)
       if (searchQuery.isNotEmpty) {
         final searchNum = int.tryParse(searchQuery);
         if (searchNum != null) {
@@ -102,13 +100,12 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
           query = query
               .where('name', isGreaterThanOrEqualTo: searchUpper)
               .where('name', isLessThanOrEqualTo: '$searchUpper\uf8ff')
-              .orderBy('name'); // MUST sort by Name for range filter
+              .orderBy('name');
         }
       } else {
         query = query.orderBy('kuriNumber', descending: false);
       }
 
-      // 2. STRICT 20 LIMIT
       const int fetchLimit = 20;
       query = query.limit(fetchLimit);
 
@@ -337,44 +334,39 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 doc['memberId'].toString(): doc.data() as Map<String, dynamic>
             };
 
-            // 1. IMPROVED FILTERING: Matches status and search local results
             List<DocumentSnapshot> filteredMembers = _allMembers.where((mDoc) {
               final d = mDoc.data() as Map<String, dynamic>;
-
               if (searchQuery.isNotEmpty) {
                 String name = d['name'].toString().toLowerCase();
                 String kuri = d['kuriNumber'].toString();
                 String target = searchQuery.toLowerCase();
                 if (!name.contains(target) && kuri != target) return false;
               }
-
               final isPaid = currentMonthPaidMap.containsKey(mDoc.id);
               if (selectedStatus == "Paid" && !isPaid) return false;
               if (selectedStatus == "Pending" && isPaid) return false;
-
               return true;
             }).toList();
 
-            // 2. RECURSIVE CHECK: If filtered list is too small but DB has more, fetch next batch
             if (filteredMembers.length < 5 && _hasMore && !_isLoadingMore && (selectedStatus != "All" || searchQuery.isNotEmpty)) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _fetchMembers();
-              });
+              WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _fetchMembers(); });
             }
 
             double grandTotalPaid = 0;
             double grandTotalBalance = 0;
 
             List<DataRow> rows = filteredMembers.map((m) {
+              final mid = m.id;
               final d = m.data() as Map<String, dynamic>;
-              final scheme = schemesMap[d['schemeId']] ?? {};
-              final isPaid = currentMonthPaidMap.containsKey(m.id);
-              final pMonth = isPaid ? currentMonthPaidMap[m.id] : null;
+              final schemeId = d['schemeId']?.toString() ?? '';
+              final scheme = schemesMap[schemeId] ?? {};
+              final isPaid = currentMonthPaidMap.containsKey(mid);
+              final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
 
-              // Winner logic
+              // --- WINNER LOGIC ---
               final schemeWinners = scheme['winners'] as Map<String, dynamic>? ?? {};
               String? wonMonthKey;
-              schemeWinners.forEach((key, value) { if (value == m.id) wonMonthKey = key; });
+              schemeWinners.forEach((key, value) { if (value == mid) wonMonthKey = key; });
               bool isCurrentMonthWinner = wonMonthKey == monthKey;
               bool hasWonInPast = false;
               if (wonMonthKey != null && !isCurrentMonthWinner) {
@@ -384,12 +376,11 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 } catch (e) { hasWonInPast = true; }
               }
 
-              // Installment & Balance logic
+              // --- CALCULATIONS ---
               double monthlyAmount = _parseNum(scheme['monthlyAmount']);
               final int? totalInstCountFromDb = int.tryParse(scheme['totalMonths']?.toString() ?? '');
               int? expectedInst = wonMonthKey != null ? (schemeWinners.keys.toList().indexOf(wonMonthKey!) + 1) : totalInstCountFromDb;
-
-              final mPayments = allPayments.where((p) => p['memberId'] == m.id);
+              final mPayments = allPayments.where((p) => p['memberId'] == mid);
               double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
               double balance = (expectedInst != null) ? (monthlyAmount * expectedInst) - totalPaid : 0;
               if (balance < 0) balance = 0;
@@ -397,8 +388,34 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               grandTotalPaid += totalPaid;
               grandTotalBalance += balance;
 
-              Color statusBgColor = isPaid ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2);
-              if (hasWonInPast) statusBgColor = const Color(0xFFEFF6FF);
+              // --- STRICT STATUS & COLOR LOGIC ---
+              Color statusBgColor = const Color(0xFFFEE2E2); // Default: Pending (Light Red)
+              String statusLabel = "PENDING";
+
+              if (isPaid && pMonth?['paidDate'] != null) {
+                DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
+
+                // Get Draw Day strictly from DB
+                int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
+                int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
+
+                DateTime monthStart = DateTime(selectedMonth.year, selectedMonth.month, 1);
+                DateTime lastPayBoundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+
+                if (pDate.isBefore(monthStart)) {
+                  statusBgColor = const Color(0xFFECD907); // Yellow
+                  statusLabel = "Advance";
+                } else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) {
+                  statusBgColor = const Color(0xFF54EA89);
+                  statusLabel = "On-Time";
+                } else {
+                  statusBgColor =  const Color(0xFFFB923C); // Orange
+                  statusLabel = "Late";
+                }
+              } else if (hasWonInPast) {
+                statusBgColor = const Color(0xFFEFF6FF); // Blue
+                statusLabel = "WON";
+              }
 
               return DataRow(
                 color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
@@ -406,18 +423,24 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                   DataCell(Text(d['kuriNumber']?.toString() ?? "-")),
                   DataCell(SizedBox(width: 180, child: Row(children: [
                     if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 16),
-                    Expanded(child: Text(d['name'].toString().toUpperCase(), style: TextStyle(fontSize: 11, color: hasWonInPast ? Colors.blue.shade900 : Colors.black))),
-                    IconButton(icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined, size: 16, color: wonMonthKey != null ? Colors.orange : Colors.grey),
-                        onPressed: (schemeWinners.containsKey(monthKey) || hasWonInPast) ? null : () => _confirmWinner(d['schemeId'], m.id, d['name'], isPaid))
+                    Expanded(child: Text(d['name'].toString().toUpperCase(), style: TextStyle(fontSize: 11, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.normal))),
+                    IconButton(icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined, size: 16, color: wonMonthKey != null ? Colors.orange : Colors.grey), onPressed: hasWonInPast ? null : () => _confirmWinner(mid, d['name'], isPaid, schemeId, scheme))
                   ]))),
                   DataCell(Text(d['phone'] ?? "-")),
                   DataCell(Text(scheme['schemeName']?.toString().toUpperCase() ?? "N/A", style: const TextStyle(fontSize: 9))),
                   DataCell(Text(currencyFormat.format(monthlyAmount))),
-                  DataCell(Text("${mPayments.length} / ${expectedInst ?? '-'}")),
+                  DataCell(Text("${mPayments.length} / ${totalInstCountFromDb ?? '-'}")),
                   DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
                   DataCell(Text(currencyFormat.format(balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
-                  DataCell(Container(width: double.infinity, height: double.infinity, alignment: Alignment.center, color: statusBgColor,
-                      child: (hasWonInPast || isPaid) ? Text(isPaid ? "PAID" : "WON", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)) : _buildPayButton(m.id, d['name'], monthlyAmount, d['schemeId']))),
+                  DataCell(Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    alignment: Alignment.center,
+                    color: statusBgColor,
+                    child: isPaid || hasWonInPast
+                        ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
+                        : _buildPayButton(mid, d['name'], monthlyAmount, schemeId),
+                  )),
                   DataCell(Text(isPaid && pMonth?['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-")),
                   DataCell(Text(isPaid ? (pMonth?['mode'] ?? "Cash") : "-")),
                   DataCell(Text(isPaid ? (pMonth?['collectedBy'] ?? "-") : "-")),
@@ -437,18 +460,13 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             }
 
             return Expanded(child: Column(children: [
-              Expanded(child: SingleChildScrollView(controller: _verticalScroll, child: SingleChildScrollView(scrollDirection: Axis.horizontal,
-                  child: DataTable(headingRowHeight: 45, dataRowMaxHeight: 60, headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
-                      border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
-                      columns: const [
-                        DataColumn(label: Text("K.NO")), DataColumn(label: Text("NAME / WINNER")), DataColumn(label: Text("PHONE")),
-                        DataColumn(label: Text("SCHEME")), DataColumn(label: Text("MONTHLY")), DataColumn(label: Text("INST")),
-                        DataColumn(label: Text("PAID")), DataColumn(label: Text("BAL")), DataColumn(label: Text("STATUS")),
-                        DataColumn(label: Text("DATE")), DataColumn(label: Text("MODE")), DataColumn(label: Text("COLLECTOR")), DataColumn(label: Text("ENTRY")),
-                      ], rows: rows)))),
+              Expanded(child: Scrollbar(controller: _verticalScroll, child: SingleChildScrollView(controller: _verticalScroll, child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: DataTable(headingRowHeight: 45, dataRowMaxHeight: 60, headingRowColor: WidgetStateProperty.all(Colors.grey.shade200), border: TableBorder.all(color: Colors.grey.shade300, width: 0.5), columns: const [
+                DataColumn(label: Text("K.NO")), DataColumn(label: Text("NAME / WINNER")), DataColumn(label: Text("PHONE")),
+                DataColumn(label: Text("SCHEME")), DataColumn(label: Text("MONTHLY")), DataColumn(label: Text("INST")),
+                DataColumn(label: Text("PAID")), DataColumn(label: Text("BAL")), DataColumn(label: Text("STATUS")),
+                DataColumn(label: Text("DATE")), DataColumn(label: Text("MODE")), DataColumn(label: Text("COLLECTOR")), DataColumn(label: Text("ENTRY")),
+              ], rows: rows))))),
               if (_isLoadingMore) const LinearProgressIndicator(),
-              if (!_hasMore && filteredMembers.isEmpty)
-                const Padding(padding: EdgeInsets.all(16), child: Text("No members matching your criteria found", style: TextStyle(color: Colors.grey))),
             ]));
           },
         );
@@ -456,26 +474,175 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
-  // --- ACTIONS & HELPERS ---
+  // --- UPDATED WINNER ACTION ---
 
-  void _confirmWinner(String schemeId, String memberId, String name, bool isPaid) {
+  void _confirmWinner(String memberId, String name, bool isPaid, String schemeId, Map<String, dynamic> schemeData) {
+    // 1. Eligibility Check
     if (!isPaid) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Member must pay this month first."), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Member must pay first to be eligible."), backgroundColor: Colors.red)
+      );
       return;
     }
-    showDialog(context: context, builder: (context) => AlertDialog(
-      title: const Text("Confirm Winner"),
-      content: Text("Set $name as winner for ${DateFormat('MMM yyyy').format(selectedMonth)}?"),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
-        ElevatedButton(onPressed: () async {
-          await FirebaseFirestore.instance.collection('schemes').doc(schemeId).update({'winners.$monthKey': memberId});
-          Navigator.pop(context);
-        }, child: const Text("CONFIRM"))
-      ],
-    ),
+
+    // 2. Draw Date Check
+    int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? "0") ?? 0;
+    DateTime now = DateTime.now();
+    if (selectedMonth.year == now.year && selectedMonth.month == now.month) {
+      if (now.day < drawDay) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Draw date is Day $drawDay. Cannot mark winner yet."), backgroundColor: Colors.orange)
+        );
+        return;
+      }
+    }
+
+    // Check if a winner already exists for this month to show a "Replace" warning
+    final schemeWinners = schemeData['winners'] as Map<String, dynamic>? ?? {};
+    bool exists = schemeWinners.containsKey(monthKey);
+    String existingWinnerId = schemeWinners[monthKey] ?? "";
+
+    // Prevent selecting the same person twice
+    if (exists && existingWinnerId == memberId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("This member is already the winner for this month."))
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          width: 500,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 140,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: exists ? Colors.red.shade50 : Colors.orange.shade50,
+                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+                ),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(color: exists ? Colors.red.shade100 : Colors.orange.shade100, shape: BoxShape.circle),
+                    child: Icon(exists ? Icons.published_with_changes_rounded : Icons.emoji_events_rounded,
+                        size: 60, color: exists ? Colors.red.shade800 : Colors.orange.shade800),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
+                child: Column(
+                  children: [
+                    Text(exists ? "REPLACE MONTHLY WINNER" : "CONFIRM MONTHLY WINNER",
+                        style: TextStyle(letterSpacing: 1.2, fontSize: 12, fontWeight: FontWeight.bold, color: exists ? Colors.red : Colors.orange)),
+                    const SizedBox(height: 16),
+                    Text(name.toUpperCase(),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF1A1A1A))),
+                    const SizedBox(height: 8),
+                    Text("Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}",
+                        style: TextStyle(fontSize: 16, color: Colors.grey.shade600)),
+                    if (exists) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12)),
+                        child: const Text(
+                          "Note: A winner is already assigned for this month. Confirming will replace them with this member.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600),
+                        ),
+                      )
+                    ]
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 20)),
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("CANCEL", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: exists ? Colors.red.shade800 : Colors.orange.shade800,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: () async {
+                          try {
+                            final batch = FirebaseFirestore.instance.batch();
+                            final schemeRef = FirebaseFirestore.instance.collection('schemes').doc(schemeId);
+                            final winnerDocId = "${schemeId}_$monthKey";
+                            final winnerRef = FirebaseFirestore.instance.collection('winners').doc(winnerDocId);
+                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
+
+                            Map<String, dynamic> winnerData = {
+                              'schemeId': schemeId,
+                              'schemeName': schemeData['schemeName'] ?? 'Unknown',
+                              'monthKey': monthKey,
+                              'memberId': memberId,
+                              'memberName': name,
+                              'updatedAt': FieldValue.serverTimestamp(),
+                              'updatedBy': widget.userName,
+                              'previousWinnerId': existingWinnerId, // Track the change
+                            };
+
+                            // Overwrites existing month key in the map
+                            batch.update(schemeRef, {'winners.$monthKey': memberId});
+                            // Overwrites the winner document for this scheme/month
+                            batch.set(winnerRef, winnerData);
+                            // Creates a new log entry
+                            batch.set(logRef, { ...winnerData, 'action': exists ? 'REPLACED' : 'ASSIGNED' });
+
+                            await batch.commit();
+
+                            if (context.mounted) Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(exists ? "Winner Replaced!" : "Winner Assigned!"))
+                            );
+                          } catch (e) {
+                            debugPrint("Winner Error: $e");
+                          }
+                        },
+                        child: Text(exists ? "CONFIRM REPLACE" : "CONFIRM WINNER", style: const TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
+
+  // --- HELPERS ---
 
   Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
     Text("$label:", style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
@@ -494,6 +661,4 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   Widget _buildPayButton(String id, String name, double amt, String sid) => ElevatedButton(onPressed: () {},
       style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size(40, 35)), child: const Text("PENDING", style: TextStyle(fontSize: 8, color: Colors.white)));
-
-
 }

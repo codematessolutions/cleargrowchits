@@ -12,15 +12,7 @@ class SchemeTheme {
   static const Color headerGrey = Color(0xFFE2E8F0);
   static const Color colOdd = Color(0xFFF8FAFC);
 
-  static Color getStatusColor(String? status) {
-    switch (status) {
-      case "Advance": return const Color(0xFFF3E20D);
-      case "On-Time": return const Color(0xFF0BEC5A);
-      case "Late":
-      case "Late (After Kuri)": return const Color(0xFFFFEDD5);
-      default: return Colors.transparent;
-    }
-  }
+  //
 }
 
 class SchemeDetailScreen extends StatefulWidget {
@@ -198,16 +190,33 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
 
 
   String _calculatePaymentStatus(DateTime paidDate) {
-    DateTime firstOfSelected = DateTime(selectedMonth.year, selectedMonth.month, 1);
-    int lastPayDay = int.tryParse(widget.schemeData['lastPaymentDate']?.toString() ?? "10") ?? 10;
-    DateTime lastPayDeadline = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59);
-    int kuriDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? "15") ?? 15;
-    DateTime kuriDrawDate = DateTime(selectedMonth.year, selectedMonth.month, kuriDay, 23, 59);
+    // 1. Get Kuri Date strictly from DB (Remove hardcoded fallback)
+    int kuriDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
 
-    if (paidDate.isBefore(firstOfSelected)) return "Advance";
-    if (paidDate.isBefore(lastPayDeadline.add(const Duration(seconds: 1)))) return "On-Time";
-    if (paidDate.isBefore(kuriDrawDate.add(const Duration(seconds: 1)))) return "Late";
-    return "Late (After Kuri)";
+    // 2. Define the "On-Time" deadline (Kuri Date - 2)
+    // Ensure it doesn't drop below 1 if Kuri Date is very early
+    int lastPayDay = kuriDay > 2 ? (kuriDay - 2) : 1;
+
+    // 3. Define Boundaries for the Selected Month
+    DateTime firstOfSelected = DateTime(selectedMonth.year, selectedMonth.month, 1);
+    DateTime lastPayDeadline = DateTime(
+        selectedMonth.year,
+        selectedMonth.month,
+        lastPayDay,
+        23, 59, 59
+    );
+
+    // 4. Status Categorization
+    if (paidDate.isBefore(firstOfSelected)) {
+      return "Advance";
+    }
+
+    if (kuriDay != 0 && paidDate.isBefore(lastPayDeadline.add(const Duration(seconds: 1)))) {
+      return "On-Time";
+    }
+
+    // If paid after (KuriDate - 2) or if KuriDate is missing in DB
+    return "Late";
   }
 
   @override
@@ -251,45 +260,32 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       if (pData['monthKey'] == monthKey) currentMonthPaidMap[mid] = pData;
     }
 
-    // 2. SAFE DYNAMIC CALCULATION (Removed hardcoded 21)
     final monthlyAmount = _parseNum(widget.schemeData['monthlyAmount'] ?? 0);
     final int? totalInstCount = int.tryParse(widget.schemeData['totalMonths']?.toString() ?? '');
-
-    // Use 0 for calculation if null to prevent crashes, but display "-" in UI
     final safeInstCount = totalInstCount ?? 0;
     final totalSchemeValue = monthlyAmount * safeInstCount;
 
     double grandTotalPaid = 0;
     double grandTotalBalance = 0;
 
-    // 3. Filtering Logic
+    // 2. Filtering Logic
     final filteredDocs = _allMembers.where((mDoc) {
       final d = mDoc.data() as Map<String, dynamic>;
-
-      // Case-insensitive name search
       if (searchQuery.isNotEmpty) {
         String name = d['name'].toString().toLowerCase();
         String kuri = d['kuriNumber'].toString();
         String target = searchQuery.toLowerCase();
         if (!name.contains(target) && kuri != target) return false;
       }
-
       final isPaid = currentMonthPaidMap.containsKey(mDoc.id);
       if (selectedStatus != "All") {
         if (selectedStatus == "Paid" && !isPaid) return false;
         if (selectedStatus == "Pending" && isPaid) return false;
       }
-
-      if (isPaid && selectedMode != "All") {
-        final pData = currentMonthPaidMap[mDoc.id]!;
-        List splits = pData['paymentSplits'] ?? [];
-        bool modeMatch = pData['mode'] == selectedMode || splits.any((s) => s['mode'] == selectedMode);
-        if (!modeMatch) return false;
-      }
       return true;
     }).toList();
 
-    // 4. Generate Table Rows
+    // 3. Generate Table Rows
     final List<DataRow> tableRows = filteredDocs.map((m) {
       final mid = m.id;
       final d = m.data() as Map<String, dynamic>;
@@ -298,39 +294,36 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       final mHistory = memberPaymentHistory[mid] ?? [];
       bool isMonthWinner = (widget.schemeData['winners'] != null && widget.schemeData['winners'][monthKey] == mid);
 
-      // Dynamic Display for Mode & Collector
-      String displayMode = "-";
-      String displayCollector = "-";
-      if (isPaid) {
-        List splits = pMonth['paymentSplits'] ?? [];
-        if (splits.isNotEmpty) {
-          displayMode = splits.map((s) => "${s['mode']} (₹${_parseNum(s['amount']).toInt()})").join("\n");
-          displayCollector = splits.map((s) => s['collector'].toString()).toSet().join(", ");
-        } else {
-          displayMode = pMonth['mode'] ?? "Cash";
-          displayCollector = pMonth['collectedBy'] ?? "-";
-        }
-      }
-
       // Calculations
       final totalPaid = mHistory.fold<double>(0.0, (sum, p) => sum + _parseNum(p['amount']));
       final balance = totalSchemeValue - totalPaid;
       grandTotalPaid += totalPaid;
       grandTotalBalance += balance;
 
-      // Advanced Status Coloring Logic
-      Color statusBgColor = isPaid ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2);
+      // --- UPDATED STRICT STATUS LOGIC ---
+      Color statusBgColor = const Color(0xFFFEE2E2); // Default: Pending (Light Red)
+      String statusLabel = "PENDING";
+
       if (isPaid && pMonth['paidDate'] != null) {
         DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
-        int lastDay = int.tryParse(widget.schemeData['lastPaymentDate']?.toString() ?? "10") ?? 10;
-        DateTime lastDate = DateTime(selectedMonth.year, selectedMonth.month, lastDay, 23, 59);
 
-        if (pDate.isBefore(DateTime(selectedMonth.year, selectedMonth.month, 1))) {
-          statusBgColor = const Color(0xFFECD907); // Advance (Yellow)
-        } else if (pDate.isBefore(lastDate.add(const Duration(seconds: 1)))) {
-          statusBgColor = const Color(0xFF0BE553); // On-Time (Green)
+        // Get Draw Day strictly from schemeData (Remove hardcoded fallback)
+        int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '') ?? 0;
+        print(drawDay.toString()+"laaaaaaaaas");
+        int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
+
+        DateTime monthStart = DateTime(selectedMonth.year, selectedMonth.month, 1);
+        DateTime lastPayBoundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+
+        if (pDate.isBefore(monthStart)) {
+          statusBgColor = const Color(0xFFECD907); // Yellow
+          statusLabel = "Advance";
+        } else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) {
+          statusBgColor = const Color(0xFF54EA89); // Light Green
+          statusLabel = "On-Time";
         } else {
-          statusBgColor = const Color(0xFFFFEDD5); // Late (Orange)
+          statusBgColor = const Color(0xFFFB923C); // Orange
+          statusLabel = "Late";
         }
       }
 
@@ -356,23 +349,23 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           DataCell(Text(d['phone'] ?? "-")),
           DataCell(Text(d['place'] ?? "-")),
           DataCell(Text(currencyFormat.format(monthlyAmount))),
-          // Display "-" if totalInstCount is missing
           DataCell(Text("${mHistory.length}/${totalInstCount ?? '-'}")),
           DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
           DataCell(Text(currencyFormat.format(balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
           DataCell(Container(
             width: double.infinity, height: double.infinity, alignment: Alignment.center, color: statusBgColor,
-            child: isPaid ? Text(pMonth['status'] ?? "PAID", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)) : _buildPayButton(mid, d['name']),
+            child: isPaid
+                ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
+                : _buildPayButton(mid, d['name']),
           )),
           DataCell(Text(isPaid && pMonth['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate()) : "-")),
-          DataCell(Text(displayMode, style: const TextStyle(fontSize: 11, height: 1.1))),
-          DataCell(Text(displayCollector, style: const TextStyle(fontSize: 11))),
+          DataCell(Text(isPaid ? (pMonth['mode'] ?? "Cash") : "-", style: const TextStyle(fontSize: 11))),
+          DataCell(Text(isPaid ? (pMonth['collectedBy'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
           DataCell(_buildEntryInfoCell(isPaid, pMonth)),
         ],
       );
     }).toList();
 
-    // 5. Add Grand Total Row
     if (tableRows.isNotEmpty) {
       tableRows.add(_buildGrandTotalRow(grandTotalPaid, grandTotalBalance, currencyFormat));
     }
@@ -395,10 +388,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                   rows: tableRows,
                 ),
               ),
-              if (_isLoadingMore)
-                const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)),
-              if (!_hasMore && _allMembers.isNotEmpty)
-                const Padding(padding: EdgeInsets.all(20), child: Text("All members loaded ✅", style: TextStyle(color: Colors.grey, fontSize: 11))),
+              if (_isLoadingMore) const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)),
             ],
           ),
         ),
@@ -417,6 +407,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     final totalMonths = widget.schemeData['totalMonths'] ?? widget.schemeData['totalInstallments'] ?? 0;
     String startStr = widget.schemeData['startMonth'] != null ? DateFormat('MMM yy').format((widget.schemeData['startMonth'] as Timestamp).toDate()) : "-";
     String endStr = widget.schemeData['endMonth'] != null ? DateFormat('MMM yy').format((widget.schemeData['endMonth'] as Timestamp).toDate()) : "-";
+    final drawDate = _parseNum(widget.kuriData['kuriDate']);
 
     return Container(
       height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
@@ -438,6 +429,9 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
             _compactItem("END", endStr),
             _vDivider(),
             _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
+            _vDivider(),
+            _compactItem("DRAW DATE", drawDate.toString()),
+
 
           ],
         ),
@@ -688,7 +682,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
   }
 
   void _confirmWinner(String memberId, String name, bool isPaid) {
-    // Logic remains untouched as per your request
+    // 1. Eligibility Check
     if (!isPaid) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Member must pay first to be eligible."), backgroundColor: Colors.red)
@@ -696,7 +690,8 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       return;
     }
 
-    int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? "10") ?? 10;
+    // 2. Draw Date Check
+    int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '') ?? 0;
     DateTime now = DateTime.now();
     if (selectedMonth.year == now.year && selectedMonth.month == now.month) {
       if (now.day < drawDay) {
@@ -707,47 +702,55 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       }
     }
 
+    // --- REPLACEMENT LOGIC CHECK ---
+    // Check if someone else is already the winner for this specific month
+    final existingWinners = widget.schemeData['winners'] as Map<String, dynamic>? ?? {};
+    bool isReplacement = existingWinners.containsKey(monthKey);
+    String oldWinnerId = existingWinners[monthKey] ?? "";
+
+    // If the clicked member is ALREADY the winner, just show a message and return
+    if (isReplacement && oldWinnerId == memberId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("This member is already the winner for this month."))
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
         backgroundColor: Colors.transparent,
         child: Container(
-          width: 500, // Fixed width for better web presentation
+          width: 500,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              )
+              BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // --- Top Banner/Decoration ---
+              // --- Top Banner (Red for Replace, Orange for New) ---
               Container(
                 height: 140,
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(24),
-                    topRight: Radius.circular(24),
-                  ),
+                  color: isReplacement ? Colors.red.shade50 : Colors.orange.shade50,
+                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
                 ),
                 child: Center(
                   child: Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.orange.shade100,
+                      color: isReplacement ? Colors.red.shade100 : Colors.orange.shade100,
                       shape: BoxShape.circle,
                     ),
-                    child: Icon(Icons.emoji_events_rounded,
+                    child: Icon(
+                        isReplacement ? Icons.published_with_changes_rounded : Icons.emoji_events_rounded,
                         size: 60,
-                        color: Colors.orange.shade800
+                        color: isReplacement ? Colors.red.shade800 : Colors.orange.shade800
                     ),
                   ),
                 ),
@@ -757,35 +760,51 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                 padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
                 child: Column(
                   children: [
-                    const Text(
-                      "CONFIRM MONTHLY WINNER",
+                    Text(
+                      isReplacement ? "REPLACE MONTHLY WINNER" : "CONFIRM MONTHLY WINNER",
                       style: TextStyle(
                         letterSpacing: 1.2,
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: Colors.orange,
+                        color: isReplacement ? Colors.red.shade800 : Colors.orange.shade800,
                       ),
                     ),
                     const SizedBox(height: 16),
                     Text(
                       name.toUpperCase(),
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF1A1A1A),
-                      ),
+                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF1A1A1A)),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       "Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}",
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey.shade600,
-                      ),
+                      style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                     ),
 
-
+                    // --- Warning Note for Replacement ---
+                    if (isReplacement) ...[
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.red.shade100),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.red.shade800, size: 20),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                "A winner already exists for this month. Confirming will replace the previous winner.",
+                                style: TextStyle(color: Color(0xFFB71C1C), fontSize: 12, fontWeight: FontWeight.w500),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -795,10 +814,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
                 decoration: BoxDecoration(
                   color: Colors.grey.shade50,
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(24),
-                    bottomRight: Radius.circular(24),
-                  ),
+                  borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24)),
                 ),
                 child: Row(
                   children: [
@@ -816,7 +832,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                     Expanded(
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange.shade800,
+                          backgroundColor: isReplacement ? Colors.red.shade800 : Colors.orange.shade800,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(vertical: 20),
@@ -828,6 +844,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                             final schemeRef = FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId);
                             final winnerDocId = "${widget.schemeId}_$monthKey";
                             final winnerRef = FirebaseFirestore.instance.collection('winners').doc(winnerDocId);
+                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
 
                             Map<String, dynamic> winnerData = {
                               'schemeId': widget.schemeId,
@@ -837,13 +854,14 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                               'memberName': name,
                               'updatedAt': FieldValue.serverTimestamp(),
                               'updatedBy': widget.userName,
+                              'isReplacement': isReplacement,
+                              'oldWinnerId': oldWinnerId,
                             };
 
-                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
-
+                            // --- Batch Commit ---
                             batch.update(schemeRef, {'winners.$monthKey': memberId});
                             batch.set(winnerRef, winnerData);
-                            batch.set(logRef, { ...winnerData, 'action': 'ASSIGNED/REPLACED' });
+                            batch.set(logRef, { ...winnerData, 'action': isReplacement ? 'REPLACED' : 'ASSIGNED' });
 
                             await batch.commit();
 
@@ -853,12 +871,17 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                             });
 
                             if (context.mounted) Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winner updated & logged!")));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(isReplacement ? "Winner replaced & logged!" : "Winner assigned & logged!"))
+                            );
                           } catch (e) {
                             debugPrint("Winner Error: $e");
                           }
                         },
-                        child: const Text("CONFIRM WINNER", style: TextStyle(fontWeight: FontWeight.bold)),
+                        child: Text(
+                            isReplacement ? "CONFIRM REPLACE" : "CONFIRM WINNER",
+                            style: const TextStyle(fontWeight: FontWeight.bold)
+                        ),
                       ),
                     ),
                   ],
