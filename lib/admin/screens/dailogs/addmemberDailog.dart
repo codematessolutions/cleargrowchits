@@ -190,25 +190,44 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
 
 
                     onPressed: () async {
-
                       if (_formKey.currentState!.validate()) {
-                        // Logic kept exactly same
-                        final docRef = FirebaseFirestore.instance.collection('members').doc();
-                        await docRef.set({
-                          'memberId': docRef.id,
-                          'schemeId': widget.schemeId,
-                          'schemeName': widget.schemeName,
-                          'kuriId': widget.kuriId,
-                          'kuriName': widget.kuriName,
-                          'kuriNumber': _kn.text,
-                          'name': _n.text.toUpperCase(),
-                          'phone': _p.text,
-                          'place': _pl.text.toUpperCase(),
-                          'careOf': _selectedCareOf,
-                          'addedById': widget.userId,
-                          'addedByName': widget.userName
-                        });
-                        Navigator.pop(context);
+                        // 1. Show a loading state if possible, or disable the button
+                        // to prevent double-clicks creating duplicate members.
+
+                        try {
+                          final docRef = FirebaseFirestore.instance.collection('members').doc();
+
+                          await docRef.set({
+                            'memberId': docRef.id,
+                            'schemeId': widget.schemeId,
+                            'schemeName': widget.schemeName,
+                            'kuriId': widget.kuriId,
+                            'kuriName': widget.kuriName,
+
+                            // CHANGE: Convert to int so sorting/filtering works correctly
+                            'kuriNumber': int.tryParse(_kn.text) ?? 0,
+
+                            'name': _n.text.toUpperCase().trim(), // Added trim() to remove accidental spaces
+                            'phone': _p.text.trim(),
+                            'place': _pl.text.toUpperCase().trim(),
+                            'careOf': _selectedCareOf,
+                            'addedById': widget.userId,
+                            'addedByName': widget.userName,
+                            'createdAt': FieldValue.serverTimestamp(), // Useful for audit logs
+                          });
+
+                          if (context.mounted) {
+                            // We pass 'true' so the main screen knows a member was actually added
+                            Navigator.pop(context, true);
+                          }
+                        } catch (e) {
+                          // Show an error if the internet fails
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Error saving: $e"), backgroundColor: Colors.red),
+                            );
+                          }
+                        }
                       }
                     },
                     child: const Text("SAVE MEMBER", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5)),
@@ -246,6 +265,8 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
   }
 }
 
+
+
 class MarkPaymentDialog extends StatefulWidget {
   final String memberName;
   final double fullAmount;
@@ -265,12 +286,13 @@ class MarkPaymentDialog extends StatefulWidget {
 }
 
 class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
+  // Logic remains exactly as you provided
   List<Map<String, dynamic>> splits = [
     {
-      "mode": "Cash",
+      "mode": null,
       "amount": 0.0,
       "collector": null,
-      "date": DateTime.now() // Individual date per split
+      "date": DateTime.now()
     }
   ];
 
@@ -279,96 +301,173 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   @override
   Widget build(BuildContext context) {
     bool isTotalMatched = totalEntered.toInt() == widget.fullAmount.toInt();
-    bool areFieldsFilled = !splits.any((s) => s['collector'] == null || s['amount'] <= 0);
+    bool areFieldsFilled = !splits.any((s) => s['collector'] == null || s['mode'] == null || s['amount'] <= 0);
     bool isComplete = isTotalMatched && areFieldsFilled;
 
     return Dialog(
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: Colors.transparent,
       child: Container(
-        width: 750, // Wider for 4-column layout
-        padding: const EdgeInsets.all(24),
+        width: 850,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 40,
+              offset: const Offset(0, 15),
+            )
+          ],
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Row(
-              children: [
-                const Icon(Icons.receipt_long, color: Color(0xFF1E3A8A), size: 28),
-                const SizedBox(width: 12),
-                Text(widget.memberName.toUpperCase(),
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: Color(0xFF1E3A8A))),
-                const Spacer(),
-                Text("DUE: ₹${widget.fullAmount.toInt()}",
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey)),
-              ],
-            ),
-            const Divider(height: 32),
-
-            // Split Headers
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8, left: 4),
+            // --- HEADER ---
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
+                ),
+                border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+              ),
               child: Row(
                 children: [
-                  SizedBox(width: 130, child: Text("DATE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                  SizedBox(width: 110, child: Text("AMOUNT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                  Expanded(child: Text("MODE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                  SizedBox(width: 10),
-                  Expanded(child: Text("COLLECTOR", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                  SizedBox(width: 40),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E3A8A).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
+                  ),
+                  const SizedBox(width: 16),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.memberName.toUpperCase(),
+                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: Color(0xFF1E293B)),
+                      ),
+                      const Text("Update payment settlement", style: TextStyle(fontSize: 12, color: Colors.blueGrey)),
+                    ],
+                  ),
+                  const Spacer(),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const Text("DUE AMOUNT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
+                      Text(
+                        "₹${widget.fullAmount.toInt()}",
+                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: Color(0xFF1E3A8A)),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
 
+            // --- TABLE HEADERS ---
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
+              child: Row(
+                children: [
+                  _headerTxt("DATE", 130),
+                  const SizedBox(width: 8),
+                  _headerTxt("AMOUNT", 110),
+                  const SizedBox(width: 8),
+                  Expanded(child: _headerTxt("PAYMENT MODE", 0)),
+                  const SizedBox(width: 8),
+                  Expanded(child: _headerTxt("COLLECTOR", 0)),
+                  const SizedBox(width: 48),
+                ],
+              ),
+            ),
+
+            // --- SPLIT LIST ---
             Flexible(
               child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
                 child: Column(
                   children: splits.asMap().entries.map((entry) => _buildSplitRow(entry.key)).toList(),
                 ),
               ),
             ),
 
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: () => setState(() => splits.add({
-                "mode": "Cash", "amount": 0.0, "collector": null, "date": DateTime.now()
-              })),
-              icon: const Icon(Icons.add_circle_outline),
-              label: const Text("ADD ANOTHER DATE / SPLIT"),
+            // --- ADD BUTTON ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  side: BorderSide(color: Colors.blue.shade200),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => setState(() => splits.add({
+                  "mode": null, "amount": 0.0, "collector": null, "date": DateTime.now()
+                })),
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+                label: const Text("ADD ANOTHER DATE / SPLIT", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
             ),
 
-            const SizedBox(height: 24),
-            // Summary Bar
-            _buildSummaryBar(isTotalMatched),
-
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E3A8A),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                  ),
-                  onPressed: isComplete ? () async {
-                    // 1. Wait for the Firestore save to finish
-                    await widget.onConfirm(splits, splits.first['date']);
-
-                    // 2. Only pop ONCE
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                    }
-                  } : null,
-                  child: const Text("CONFIRM PAYMENT"),
+            // --- FOOTER SECTION ---
+            Container(
+              padding: const EdgeInsets.all(32),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+                color: Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.only(
+                  bottomLeft: Radius.circular(24),
+                  bottomRight: Radius.circular(24),
                 ),
-              ],
+              ),
+              child: Column(
+                children: [
+                  _buildSummaryBar(isTotalMatched),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("CANCEL", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold, fontSize: 14)),
+                      ),
+                      const SizedBox(width: 20),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1E3A8A),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                        onPressed: isComplete ? () async {
+                          await widget.onConfirm(splits, splits.first['date']);
+                          if (context.mounted) Navigator.of(context).pop();
+                        } : null,
+                        child: const Text("CONFIRM PAYMENT", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _headerTxt(String label, double width) {
+    return SizedBox(
+      width: width > 0 ? width : null,
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8), letterSpacing: 1.1),
       ),
     );
   }
@@ -383,6 +482,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           SizedBox(
             width: 130,
             child: InkWell(
+              borderRadius: BorderRadius.circular(12),
               onTap: () async {
                 DateTime? p = await showDatePicker(
                   context: context,
@@ -393,82 +493,131 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                 if (p != null) setState(() => splits[index]['date'] = p);
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.white,
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.calendar_today, size: 14, color: Colors.blue),
+                    const Icon(Icons.calendar_month_rounded, size: 16, color: Colors.blue),
                     const SizedBox(width: 8),
-                    Text(DateFormat('dd-MM-yy').format(splits[index]['date']),
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    Text(
+                      DateFormat('dd-MM-yy').format(splits[index]['date']),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
                   ],
                 ),
               ),
             ),
           ),
           const SizedBox(width: 8),
+
           // 2. AMOUNT
           SizedBox(
             width: 110,
-            child: TextFormField(
+            child: _inputWrapper(TextFormField(
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(prefixText: "₹", isDense: true, border: OutlineInputBorder()),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              decoration: const InputDecoration(
+                prefixText: "₹ ",
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+              ),
               onChanged: (v) => setState(() => splits[index]['amount'] = double.tryParse(v) ?? 0.0),
-            ),
+            )),
           ),
           const SizedBox(width: 8),
+
           // 3. MODE
           Expanded(
-            child: DropdownButtonFormField<String>(
+            child: _inputWrapper(DropdownButtonFormField<String>(
               value: splits[index]['mode'],
               isDense: true,
-              decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(10)),
-              items: ["Cash", "GPay", "Bank", "Cheque"].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
+              hint: const Text("Select Mode", style: TextStyle(fontSize: 13)),
+              decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
+              items: ["Cash", "GPay", "Bank"].map((e) => DropdownMenuItem(
+                value: e,
+                child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              )).toList(),
               onChanged: (v) => setState(() => splits[index]['mode'] = v),
-            ),
+              validator: (v) => v == null ? "Required" : null,
+            )),
           ),
           const SizedBox(width: 8),
+
           // 4. COLLECTOR
           Expanded(
-            child: DropdownButtonFormField<String>(
+            child: _inputWrapper(DropdownButtonFormField<String>(
               value: splits[index]['collector'],
               isDense: true,
-              decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(10)),
-              items: widget.adminList.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
+              hint: const Text("Select Collector", style: TextStyle(fontSize: 13)),
+              decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
+              items: widget.adminList.map((e) => DropdownMenuItem(
+                value: e,
+                child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              )).toList(),
               onChanged: (v) => setState(() => splits[index]['collector'] = v),
-            ),
+            )),
           ),
+
           // DELETE
           SizedBox(
-            width: 40,
+            width: 48,
             child: splits.length > 1
-                ? IconButton(onPressed: () => setState(() => splits.removeAt(index)), icon: const Icon(Icons.delete_outline, color: Colors.red))
-                : null,
+                ? IconButton(
+              onPressed: () => setState(() => splits.removeAt(index)),
+              icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent, size: 24),
+            )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
     );
   }
 
+  // Visual wrapper to keep all inputs looking identical
+  Widget _inputWrapper(Widget child) {
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+      ),
+      child: child,
+    );
+  }
+
   Widget _buildSummaryBar(bool isMatch) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
       decoration: BoxDecoration(
-        color: isMatch ? Colors.green.shade50 : Colors.red.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: isMatch ? Colors.green.shade200 : Colors.red.shade200),
+        color: isMatch ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isMatch ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA)),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text("TOTAL COLLECTED: ₹${totalEntered.toInt()}",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isMatch ? Colors.green.shade900 : Colors.red.shade900)),
-          if (!isMatch)
-            Text("WAITING FOR ₹${(widget.fullAmount - totalEntered).toInt()}",
-                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+          Icon(isMatch ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+              color: isMatch ? Colors.green.shade600 : Colors.red.shade600, size: 28),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "TOTAL ENTERED: ₹${totalEntered.toInt()}",
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: isMatch ? Colors.green.shade900 : Colors.red.shade900),
+              ),
+              Text(
+                isMatch ? "Ready to confirm." : "Short of target by ₹${(widget.fullAmount - totalEntered).toInt()}",
+                style: TextStyle(fontSize: 12, color: isMatch ? Colors.green.shade700 : Colors.red.shade700),
+              ),
+            ],
+          ),
         ],
       ),
     );

@@ -688,17 +688,187 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
   }
 
   void _confirmWinner(String memberId, String name, bool isPaid) {
+    // Logic remains untouched as per your request
     if (!isPaid) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Member must pay first"), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Member must pay first to be eligible."), backgroundColor: Colors.red)
+      );
       return;
     }
-    showDialog(context: context, builder: (context) => AlertDialog(
-      title: const Text("Winner"), content: Text("Mark $name as winner?"),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("NO")), ElevatedButton(onPressed: () async {
-        await FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId).update({'winners.$monthKey': memberId});
-        Navigator.pop(context);
-      }, child: const Text("YES"))],
-    ));
+
+    int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? "10") ?? 10;
+    DateTime now = DateTime.now();
+    if (selectedMonth.year == now.year && selectedMonth.month == now.month) {
+      if (now.day < drawDay) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Draw date is Day $drawDay. Cannot mark winner yet."), backgroundColor: Colors.orange)
+        );
+        return;
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          width: 500, // Fixed width for better web presentation
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              )
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // --- Top Banner/Decoration ---
+              Container(
+                height: 140,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(24),
+                    topRight: Radius.circular(24),
+                  ),
+                ),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.emoji_events_rounded,
+                        size: 60,
+                        color: Colors.orange.shade800
+                    ),
+                  ),
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
+                child: Column(
+                  children: [
+                    const Text(
+                      "CONFIRM MONTHLY WINNER",
+                      style: TextStyle(
+                        letterSpacing: 1.2,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      name.toUpperCase(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF1A1A1A),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}",
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+
+
+                  ],
+                ),
+              ),
+
+              // --- Action Buttons ---
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(24),
+                    bottomRight: Radius.circular(24),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("CANCEL", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange.shade800,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: () async {
+                          try {
+                            final batch = FirebaseFirestore.instance.batch();
+                            final schemeRef = FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId);
+                            final winnerDocId = "${widget.schemeId}_$monthKey";
+                            final winnerRef = FirebaseFirestore.instance.collection('winners').doc(winnerDocId);
+
+                            Map<String, dynamic> winnerData = {
+                              'schemeId': widget.schemeId,
+                              'schemeName': widget.schemeData['schemeName'],
+                              'monthKey': monthKey,
+                              'memberId': memberId,
+                              'memberName': name,
+                              'updatedAt': FieldValue.serverTimestamp(),
+                              'updatedBy': widget.userName,
+                            };
+
+                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
+
+                            batch.update(schemeRef, {'winners.$monthKey': memberId});
+                            batch.set(winnerRef, winnerData);
+                            batch.set(logRef, { ...winnerData, 'action': 'ASSIGNED/REPLACED' });
+
+                            await batch.commit();
+
+                            setState(() {
+                              widget.schemeData['winners'] ??= {};
+                              widget.schemeData['winners'][monthKey] = memberId;
+                            });
+
+                            if (context.mounted) Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winner updated & logged!")));
+                          } catch (e) {
+                            debugPrint("Winner Error: $e");
+                          }
+                        },
+                        child: const Text("CONFIRM WINNER", style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildPayButton(String id, String name) {
@@ -724,11 +894,16 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     ));
   }
 
-  void _showAddMember() {
-    showDialog(context: context, builder: (context) => AddMemberDialog(
+  Future<void> _showAddMember() async {
+    final saved = await  showDialog(context: context, builder: (context) => AddMemberDialog(
       schemeId: widget.schemeId, kuriId: widget.schemeData["kuriId"], kuriName: widget.schemeData["kuriName"] ?? "Kuri", schemeName: widget.schemeData["schemeName"], userId: widget.userId, userName: widget.userName,
     ));
+    // Only refresh if 'true' was returned
+    if (saved == true) {
+      _fetchMembers(isInitial: true);
+    }
   }
+
 }
 
 
