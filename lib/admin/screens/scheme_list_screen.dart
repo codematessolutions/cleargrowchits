@@ -172,7 +172,7 @@ class _SchemeListScreenState extends State<SchemeListScreen> {
                                   kuriData: widget.kuriData,
                                   userId: widget.userId,
                                   userName: widget.userName,
-                                  userRole: widget.userRole,
+                                  userRole: widget.userRole, kuriId: widget.kuriId,
                                 ),
                               ),
                             );

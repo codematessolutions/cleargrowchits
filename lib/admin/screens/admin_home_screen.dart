@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'companyfinance.dart';
+import 'master_members_screen.dart';
 import 'staff_management_screen.dart';
 import 'expense_screen.dart';
 import 'kuri_list_screen.dart';
@@ -204,6 +205,22 @@ class _AdminHomeState extends State<AdminHome> {
                     () => Navigator.push(context, MaterialPageRoute(builder: (_) => ExpenseManagerWeb(userId: widget.userId, userName: widget.userName, userRole: widget.userRole)))),
             _webActionCard("Company", "Total Report", Icons.account_balance, Colors.greenAccent,
                     () => Navigator.push(context, MaterialPageRoute(builder: (_) => CompanyGlobalAuditWeb( userName: widget.userName, userRole: widget.userRole,)))),
+            _webActionCard(
+              "Master Members",
+              "Central Member Directory",
+              Icons.person_search_rounded,
+              Colors.deepPurpleAccent,
+                  () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                        builder: (_) => MasterMemberScreen( // You will create this screen next
+                          userId: widget.userId,
+                          userName: widget.userName,
+                          userRole: widget.userRole
+                      )
+                  )
+              ),
+            ),
           ],
         ),
       ],

@@ -74,20 +74,21 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   // --- CORE FETCH LOGIC ---
   Future<void> _fetchMembers({bool isInitial = false}) async {
-    print("dddddd"+isInitial.toString());
     if (isInitial) {
       setState(() {
         _isLoading = true;
-        _allMembers = [];
+        _allMembers = []; // Clear existing list for fresh fetch
         _lastDocument = null;
         _hasMore = true;
       });
     }
 
+    // Prevent redundant calls
     if (!_hasMore || (_isLoadingMore && !isInitial)) return;
     if (!isInitial) setState(() => _isLoadingMore = true);
 
     try {
+      // Base Query: Filter by the entire Kuri
       Query query = FirebaseFirestore.instance
           .collection('members')
           .where('kuriId', isEqualTo: widget.kuriId);
@@ -95,9 +96,10 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       if (searchQuery.isNotEmpty) {
         final searchNum = int.tryParse(searchQuery);
         if (searchNum != null) {
-          query = query.where('kuriNumber', isEqualTo: searchNum)
-              .orderBy('kuriNumber', descending: false);
+          // 1. Search by Unique Kuri Number (Direct match)
+          query = query.where('kuriNumber', isEqualTo: searchNum);
         } else {
+          // 2. Search by Name (Range filter)
           String searchUpper = searchQuery.toUpperCase();
           query = query
               .where('name', isGreaterThanOrEqualTo: searchUpper)
@@ -105,13 +107,15 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               .orderBy('name');
         }
       } else {
+        // 3. Default View: Order by the unique Kuri-wide Number
         query = query.orderBy('kuriNumber', descending: false);
       }
 
       const int fetchLimit = 20;
       query = query.limit(fetchLimit);
 
-      if (_lastDocument != null) {
+      // Pagination logic
+      if (_lastDocument != null && !isInitial) {
         query = query.startAfterDocument(_lastDocument!);
       }
 
@@ -119,16 +123,29 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
       if (mounted) {
         setState(() {
-          _allMembers.addAll(snap.docs);
+          // If it's a new search or refresh, replace the list; otherwise, append
+          if (isInitial) {
+            _allMembers = snap.docs;
+          } else {
+            _allMembers.addAll(snap.docs);
+          }
+
           _hasMore = snap.docs.length == fetchLimit;
           if (snap.docs.isNotEmpty) _lastDocument = snap.docs.last;
+
           _isLoading = false;
           _isLoadingMore = false;
         });
       }
     } catch (e) {
       debugPrint("Firestore Error: $e");
-      if (mounted) setState(() { _isLoading = false; _isLoadingMore = false; });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isLoadingMore = false;
+          _hasMore = false;
+        });
+      }
     }
   }
 
@@ -368,53 +385,34 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               final d = m.data() as Map<String, dynamic>;
               final schemeId = d['schemeId']?.toString() ?? '';
               final scheme = schemesMap[schemeId] ?? {};
+              final String remark = (d['remark'] ?? "").toString();
+
               final isPaid = currentMonthPaidMap.containsKey(mid);
               final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
 
-              // --- SAFE WINNER LOGIC ---
+              List<dynamic> splits = isPaid ? (pMonth!['paymentSplits'] as List? ?? []) : [];
+
               final Map<String, dynamic> schemeWinners = scheme['winners'] != null
                   ? Map<String, dynamic>.from(scheme['winners'] as Map)
                   : {};
-
               String? wonMonthKey;
               schemeWinners.forEach((key, value) { if (value.toString() == mid) wonMonthKey = key.toString(); });
-
               bool isCurrentMonthWinner = wonMonthKey == monthKey;
               bool hasWonInPast = false;
               String winnerSubtitle = "";
-
               if (wonMonthKey != null) {
                 try {
                   DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
                   if (!isCurrentMonthWinner && winDate.isBefore(selectedMonth)) hasWonInPast = true;
-
-                  // --- CALCULATE ORDINAL (1st, 2nd, etc) ---
-                  DateTime start = (scheme['startMonth'] is Timestamp)
-                      ? (scheme['startMonth'] as Timestamp).toDate()
-                      : winDate;
-
-                  int monthDiff = ((winDate.year - start.year) * 12) + winDate.month - start.month;
-                  int monthOrdinal = monthDiff + 1;
-
-                  String suffix = "th";
-                  int digit = monthOrdinal % 10;
-                  int lastTwo = monthOrdinal % 100;
-                  if (digit == 1 && lastTwo != 11) suffix = "st";
-                  else if (digit == 2 && lastTwo != 12) suffix = "nd";
-                  else if (digit == 3 && lastTwo != 13) suffix = "rd";
-
-                  // Label for the Name Section Subtitle
-                  winnerSubtitle = "$monthOrdinal$suffix Month Winner - ${DateFormat('MMMM yyyy').format(winDate)}";
-                } catch (e) {
-                  winnerSubtitle = "Winner";
-                }
+                  DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : winDate;
+                  int monthOrdinal = (((winDate.year - start.year) * 12) + winDate.month - start.month) + 1;
+                  winnerSubtitle = "$monthOrdinal Month Winner - ${DateFormat('MMM yyyy').format(winDate)}";
+                } catch (e) { winnerSubtitle = "Winner"; }
               }
 
-              // --- CALCULATIONS (WON LOGIC) ---
               double monthlyAmount = _parseNum(scheme['monthlyAmount']);
               final int totalInstCountFromDb = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
               int expectedInst = totalInstCountFromDb;
-
               if (wonMonthKey != null) {
                 DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
                 List<String> keys = List.generate(totalInstCountFromDb, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
@@ -426,39 +424,29 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
               double balance = (monthlyAmount * expectedInst) - totalPaid;
               if (balance < 0) balance = 0;
-
               grandTotalPaid += totalPaid;
               grandTotalBalance += balance;
 
-              // --- STRICT STATUS & COLOR LOGIC ---
               Color statusBgColor = const Color(0xFFFEE2E2);
               String statusLabel = "PENDING";
-
-              if (hasWonInPast) {
-                statusBgColor = const Color(0xFFEFF6FF); // Blue
-                statusLabel = "WON";
-              } else if (isCurrentMonthWinner) {
-                statusBgColor = Colors.amber.shade100; // Gold
-                statusLabel = "WINNER";
-              } else if (isPaid && pMonth?['paidDate'] != null) {
+              if (hasWonInPast) { statusBgColor = const Color(0xFFEFF6FF); statusLabel = "WON"; }
+              else if (isCurrentMonthWinner) { statusBgColor = Colors.amber.shade100; statusLabel = "WINNER"; }
+              else if (isPaid && pMonth?['paidAt'] != null) {
                 DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
+                DateTime schemeStartDate = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
                 int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
                 int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
-                DateTime monthStart = DateTime(selectedMonth.year, selectedMonth.month, 1);
-                DateTime lastPayBoundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
-
-                if (pDate.isBefore(monthStart)) { statusBgColor = const Color(0xFFECD907); statusLabel = "Advance"; }
-                else if (drawDay != 0 && pDate.isBefore(lastPayBoundary.add(const Duration(seconds: 1)))) { statusBgColor = const Color(0xFF54EA89); statusLabel = "On-Time"; }
+                DateTime deadline = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+                if (pDate.isBefore(schemeStartDate)) { statusBgColor = const Color(0xFFECD907); statusLabel = "Advance"; }
+                else if (pDate.isBefore(deadline.add(const Duration(seconds: 1)))) { statusBgColor = const Color(0xFF54EA89); statusLabel = "On-Time"; }
                 else { statusBgColor = const Color(0xFFFB923C); statusLabel = "Late"; }
               }
 
               return DataRow(
                 color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
                 cells: [
-                  DataCell(Text(d['kuriNumber']?.toString() ?? "-")),
-
-                  // --- NAME SECTION WITH SUBTITLE ---
-                  DataCell(SizedBox(width: 200, child: Column(
+                  DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold))),
+                  DataCell(SizedBox(width: 240, child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -466,51 +454,64 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                         if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 14),
                         const SizedBox(width: 4),
                         Expanded(child: Text(d['name'].toString().toUpperCase(),
-                            style: TextStyle(fontSize: 10, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.normal))),
+                            style: TextStyle(fontSize: 13, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: FontWeight.bold))),
                       ]),
+                      if (remark.isNotEmpty)
+                        Text("NOTE: $remark", style: const TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.bold)),
                       if (wonMonthKey != null)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 18),
-                          child: Text(winnerSubtitle, style: const TextStyle(fontSize: 8, color: Colors.blue, fontWeight: FontWeight.w600)),
-                        ),
+                        Text(winnerSubtitle, style: const TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.w600)),
                     ],
                   ))),
-
-                  DataCell(Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 11))),
-                  DataCell(Text(scheme['schemeName']?.toString().toUpperCase() ?? "N/A", style: const TextStyle(fontSize: 9))),
-                  DataCell(Text(currencyFormat.format(monthlyAmount))),
-                  DataCell(Text("${mPayments.length} / $expectedInst")),
-                  DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
-                  DataCell(Text(currencyFormat.format(balance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
-
-                  // --- STATUS SECTION (WON / WINNER / PENDING) ---
+                  DataCell(Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 13))),
+                  DataCell(Text(scheme['schemeName']?.toString().toUpperCase() ?? "N/A", style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 13))),
+                  DataCell(Text("${mPayments.length}/$expectedInst", style: const TextStyle(fontSize: 13))),
+                  DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(fontSize: 13, color: Colors.green, fontWeight: FontWeight.bold))),
+                  DataCell(Text(currencyFormat.format(balance), style: const TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold))),
                   DataCell(Container(
-                    width: double.infinity,
-                    alignment: Alignment.center,
+                    width: double.infinity, height: double.infinity, alignment: Alignment.center,
                     color: statusBgColor,
                     child: (isPaid || hasWonInPast || isCurrentMonthWinner)
-                        ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
+                        ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))
                         : _buildPayButton(mid, d['name'], monthlyAmount, schemeId),
                   )),
+                  DataCell(Text(isPaid && pMonth?['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-", style: const TextStyle(fontSize: 12))),
 
-                  DataCell(Text(isPaid && pMonth?['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-")),
-                  DataCell(Text(isPaid ? (pMonth?['mode'] ?? "Cash") : "-", style: const TextStyle(fontSize: 11))),
-                  DataCell(Text(isPaid ? (pMonth?['collectedBy'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
-                  DataCell(Text(isPaid ? (pMonth?['addedByName'] ?? "-") : "-", style: const TextStyle(fontSize: 11))),
+                  DataCell(isPaid
+                      ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: splits.isNotEmpty
+                        ? splits.map((s) => Text("${currencyFormat.format(_parseNum(s['amount']))} (${s['mode']})", style: const TextStyle(fontSize: 11))).toList()
+                        : [Text(pMonth?['mode'] ?? "Cash", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))],
+                  )
+                      : const Text("-", style: TextStyle(fontSize: 12))),
+
+                  DataCell(isPaid
+                      ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: splits.isNotEmpty
+                        ? splits.map((s) => Text(s['collectorName']?.toString() ?? "-", style: const TextStyle(fontSize: 11))).toList()
+                        : [Text(pMonth?['collectedBy'] ?? "-", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))],
+                  )
+                      : const Text("-", style: TextStyle(fontSize: 12))),
+
+                  DataCell(isPaid
+                      ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text((pMonth?['addedByName'] ?? "-").toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      if (pMonth?['paidAt'] != null)
+                        Text(DateFormat('dd-MMM hh:mm a').format((pMonth!['paidAt'] as Timestamp).toDate()),
+                            style: const TextStyle(fontSize: 10, color: Colors.black87, fontWeight: FontWeight.w500)),
+                    ],
+                  )
+                      : const Text("-", style: TextStyle(fontSize: 12))),
                 ],
               );
             }).toList();
-
-            if (rows.isNotEmpty) {
-              rows.add(DataRow(color: WidgetStateProperty.all(Colors.grey[100]), cells: [
-                const DataCell(Text("")),
-                const DataCell(Text("GRAND TOTAL", style: TextStyle(fontWeight: FontWeight.bold))),
-                const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")),
-                DataCell(Text(currencyFormat.format(grandTotalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))),
-                DataCell(Text(currencyFormat.format(grandTotalBalance), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
-                const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")), const DataCell(Text("")),
-              ]));
-            }
 
             return Expanded(child: Column(children: [
               Expanded(child: Scrollbar(
@@ -520,22 +521,32 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                       child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: DataTable(
-                              headingRowHeight: 45,
-                              dataRowMaxHeight: 60,
+                              headingRowHeight: 30,
+                              dataRowMaxHeight: 49, // Increased to fit larger text
+                              columnSpacing: 50,    // Increased for horizontal breathing room
+                              horizontalMargin: 10,
                               headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
                               border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
                               columns: const [
-                                DataColumn(label: Text("K.NO")), DataColumn(label: Text("NAME / WINNER")), DataColumn(label: Text("PHONE")),
-                                DataColumn(label: Text("SCHEME")), DataColumn(label: Text("MONTHLY")), DataColumn(label: Text("INST")),
-                                DataColumn(label: Text("PAID")), DataColumn(label: Text("BAL")), DataColumn(label: Text("STATUS")),
-                                DataColumn(label: Text("DATE")), DataColumn(label: Text("MODE")), DataColumn(label: Text("COLLECTOR")), DataColumn(label: Text("ENTRY")),
+                                DataColumn(label: Text("K.NO", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("NAME", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("PHONE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("SCHEME", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("MONTHLY", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("INST", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("PAID", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("BAL", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("STATUS", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("DATE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("MODE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("COLLECTOR", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+                                DataColumn(label: Text("ENTRY", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
                               ],
                               rows: rows
                           )
                       )
                   )
-              )),
-              if (_isLoadingMore) const LinearProgressIndicator(),
+              ))
             ]));
           },
         );

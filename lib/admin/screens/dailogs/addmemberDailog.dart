@@ -1,311 +1,247 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../SchemeDetailScreen.dart';
 
-class AddMemberDialog extends StatefulWidget {
+class SelectFromMasterDialog extends StatefulWidget {
   final String schemeId;
   final String schemeName;
   final String kuriId;
   final String kuriName;
   final String userId;
   final String userName;
-  const AddMemberDialog({super.key, required this.schemeId,required this.schemeName, required this.kuriId, required this.kuriName,required this.userId,required this.userName});
-  @override State<AddMemberDialog> createState() => _AddMemberDialogState();
-}
 
-
-
-
-
-class _AddMemberDialogState extends State<AddMemberDialog> {
-  // Controllers
-  final _n = TextEditingController(); // Name
-  final _p = TextEditingController(); // Phone
-  final _pl = TextEditingController(); // Place
-
-  String? _selectedCareOf;
-  bool _isLoading = false; // Loader state
-
-  // GlobalKey for form validation
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  const SelectFromMasterDialog({
+    super.key,
+    required this.schemeId,
+    required this.schemeName,
+    required this.kuriId,
+    required this.kuriName,
+    required this.userId,
+    required this.userName,
+  });
 
   @override
-  void dispose() {
-    _n.dispose();
-    _p.dispose();
-    _pl.dispose();
-    super.dispose();
+  State<SelectFromMasterDialog> createState() => _SelectFromMasterDialogState();
+}
+
+class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _remarkController = TextEditingController();
+  List<DocumentSnapshot> _searchResults = [];
+
+  // NEW: List to hold multiple selected members
+  final List<DocumentSnapshot> _selectedMembers = [];
+
+  bool _isSearching = false;
+  bool _isSaving = false;
+
+  // Search Logic (Improved for Name & Phone)
+  Future<void> _performSearch() async {
+    String term = _searchController.text.trim();
+
+    if (term.isEmpty) return;
+
+    setState(() {
+      _isSearching = true;
+      _searchResults = [];
+    });
+
+    try {
+      QuerySnapshot query;
+      if (RegExp(r'^[0-9]+$').hasMatch(term)) {
+        query = await FirebaseFirestore.instance
+            .collection('master_members')
+            .where('phone', isEqualTo: term)
+            .get();
+      } else {
+        // 1. Standardize the term to Uppercase
+        String searchKey = term.toUpperCase();
+
+        // 2. Perform the Range Query
+        // This looks for any name starting with the searchKey
+        query = await FirebaseFirestore.instance
+            .collection('master_members')
+            .orderBy('name') // Crucial for range queries
+            .startAt([searchKey])
+            .endAt(['$searchKey\uf8ff'])
+            .limit(15)
+            .get();
+      }
+
+      setState(() {
+        _searchResults = query.docs;
+        _isSearching = false;
+      });
+    } catch (e) {
+      print("Search Error: $e"); // Check your debug console for index errors
+      setState(() => _isSearching = false);
+    }
+  }
+  // Toggle selection
+  void _toggleMember(DocumentSnapshot doc) {
+    setState(() {
+      if (_selectedMembers.any((m) => m.id == doc.id)) {
+        _selectedMembers.removeWhere((m) => m.id == doc.id);
+      } else {
+        _selectedMembers.add(doc);
+      }
+    });
+  }
+
+  // --- BATCH SAVE LOGIC ---
+  Future<void> _handleBulkEnrollment() async {
+    if (_selectedMembers.isEmpty) return;
+    setState(() => _isSaving = true);
+
+    try {
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      // --- CHANGE: Query by kuriId instead of schemeId ---
+      // This counts every member in every scheme under this Kuri
+      final existingCountSnap = await FirebaseFirestore.instance
+          .collection('members')
+          .where('kuriId', isEqualTo: widget.kuriId)
+          .get();
+
+      int currentKuriCount = existingCountSnap.docs.length;
+
+      for (var masterDoc in _selectedMembers) {
+        currentKuriCount++; // Increment based on total Kuri strength
+        Map<String, dynamic> mData = masterDoc.data() as Map<String, dynamic>? ?? {};
+
+        DocumentReference newMemberRef = FirebaseFirestore.instance.collection('members').doc();
+
+        batch.set(newMemberRef, {
+          'memberId': newMemberRef.id,
+          'masterId': masterDoc.id,
+          'schemeId': widget.schemeId,
+          'schemeName': widget.schemeName,
+          'kuriId': widget.kuriId,
+          'kuriName': widget.kuriName,
+          'kuriNumber': currentKuriCount, // Global Kuri-wide Number
+          'name': (mData['name'] ?? "Unknown").toString().toUpperCase(),
+          'phone': (mData['phone'] ?? "").toString(),
+          'place': (mData['place'] ?? "").toString(),
+          'remark': _remarkController.text.trim(),
+          'addedById': widget.userId,
+          'addedByName': widget.userName,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+      _remarkController.clear();
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: 550,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 30,
-              offset: const Offset(0, 15),
-            )
-          ],
-        ),
+        width: 600,
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
-              decoration: const BoxDecoration(
-                color: Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  topRight: Radius.circular(20),
-                ),
-                border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.person_add_alt_1_rounded, color: Color(0xFF6366F1), size: 28),
-                  SizedBox(width: 16),
-                  Text(
-                    "Enroll New Member",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF1E293B)),
-                  ),
-                ],
+            const Text("BULK ENROLL MEMBERS", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: Color(0xFF1E3A8A))),
+            const SizedBox(height: 20),
+
+            // Search Input
+            TextField(
+              controller: _searchController,
+              onSubmitted: (_) => _performSearch(),
+              decoration: InputDecoration(
+                hintText: "Search Name or Phone...",
+                suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _performSearch),
+                filled: true,
+                fillColor: Colors.grey.shade100,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
               ),
             ),
 
-            // Content
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(32),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "PERSONAL INFORMATION",
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF94A3B8),
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
+            const SizedBox(height: 15),
 
-                      // Name (Full Width)
-                      _webInput(_n, "Full Name", Icons.badge_outlined),
-                      const SizedBox(height: 20),
+            // Search Results List
+            Container(
+              height: 250,
+              decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade200), borderRadius: BorderRadius.circular(12)),
+              child: _isSearching
+                  ? const Center(child: CircularProgressIndicator())
+                  : _searchResults.isEmpty
+                  ? const Center(child: Text("Search and select members"))
+                  : ListView.builder(
+                itemCount: _searchResults.length,
+                itemBuilder: (context, index) {
+                  var m = _searchResults[index];
+                  var d = m.data() as Map<String, dynamic>;
+                  bool isChecked = _selectedMembers.any((sel) => sel.id == m.id);
+                  return CheckboxListTile(
+                    value: isChecked,
+                    title: Text((d['name'] ?? "").toString().toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    subtitle: Text("${d['phone']} • ${d['place']}"),
+                    onChanged: (_) => _toggleMember(m),
+                  );
+                },
+              ),
+            ),
 
-                      // Phone & Place Row
-                      Row(
-                        children: [
-                          Expanded(child: _webInput(_p, "Phone Number", Icons.phone_android, isNum: true)),
-                          const SizedBox(width: 16),
-                          Expanded(child: _webInput(_pl, "Place", Icons.location_on_outlined)),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
-                      const Text(
-                        "ADMINISTRATIVE",
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF94A3B8),
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Care Of Stream Dropdown
-                      StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance
-                            .collection('staff_admins')
-                            .orderBy('name')
-                            .snapshots(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) {
-                            return const LinearProgressIndicator(color: Color(0xFF6366F1));
-                          }
-
-                          return DropdownButtonFormField<String>(
-                            value: _selectedCareOf,
-                            decoration: _inputDeco("Care Of", Icons.support_agent),
-                            validator: (v) => v == null ? "Required" : null,
-                            items: snapshot.data!.docs.map((doc) {
-                              return DropdownMenuItem(
-                                value: doc['name'].toString(),
-                                child: Text(doc['name'], style: const TextStyle(fontSize: 14)),
-                              );
-                            }).toList(),
-                            onChanged: _isLoading
-                                ? null
-                                : (v) => setState(() => _selectedCareOf = v),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+            // --- SELECTED MEMBERS CHIPS (Queue Area) ---
+            if (_selectedMembers.isNotEmpty) ...[
+              const Align(alignment: Alignment.centerLeft, child: Text("Selected to add:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: _selectedMembers.map((m) => Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: Chip(
+                      label: Text((m.data() as Map)['name'].toString().split(' ')[0]),
+                      onDeleted: () => _toggleMember(m),
+                      deleteIconColor: Colors.red,
+                      backgroundColor: Colors.blue.shade50,
+                    ),
+                  )).toList(),
                 ),
               ),
-            ),
+            ],
 
-            // Actions
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 32),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: _isLoading ? null : () => Navigator.pop(context),
-                    child: const Text(
-                      "Discard",
-                      style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
-                    ),
+            const SizedBox(height: 24),
+
+            // Buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E3A8A),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
-                  const SizedBox(width: 16),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6366F1),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
-                    ),
-                    onPressed: _isLoading ? null : _handleSave,
-                    child: _isLoading
-                        ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                        : const Text(
-                      "SAVE MEMBER",
-                      style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5),
-                    ),
-                  )
-                ],
-              ),
-            ),
+                  onPressed: (_selectedMembers.isEmpty || _isSaving) ? null : _handleBulkEnrollment,
+                  child: _isSaving
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text("ENROLL ${_selectedMembers.length} MEMBERS"),
+                ),
+              ],
+            )
           ],
         ),
       ),
-    );
-  }
-
-  // Refactored Save Logic
-  Future<void> _handleSave() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
-
-      try {
-        // 1. Fetch the last used Kuri Number for this specific Kuri
-        final lastMemberQuery = await FirebaseFirestore.instance
-            .collection('members')
-            .where('kuriId', isEqualTo: widget.kuriId)
-            .orderBy('kuriNumber', descending: true)
-            .limit(1)
-            .get();
-
-        int nextKuriNumber = 1; // Default starting number
-
-        if (lastMemberQuery.docs.isNotEmpty) {
-          // Increment the highest found number by 1
-          int lastNumber = lastMemberQuery.docs.first['kuriNumber'] as int;
-          nextKuriNumber = lastNumber + 1;
-        }
-
-        // 2. Save the new member
-        final docRef = FirebaseFirestore.instance.collection('members').doc();
-
-        await docRef.set({
-          'memberId': docRef.id,
-          'schemeId': widget.schemeId,
-          'schemeName': widget.schemeName,
-          'kuriId': widget.kuriId,
-          'kuriName': widget.kuriName,
-
-          // AUTOMATIC INCREMENTED VALUE
-          'kuriNumber': nextKuriNumber,
-
-          'name': _n.text.toUpperCase().trim(),
-          'phone': _p.text.trim(),
-          'place': _pl.text.toUpperCase().trim(),
-          'careOf': _selectedCareOf,
-          'addedById': widget.userId,
-          'addedByName': widget.userName,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-
-        if (mounted) {
-          Navigator.pop(context, true);
-        }
-      } catch (e) {
-        debugPrint("Error saving member: $e");
-        if (mounted) {
-          setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Error: $e"),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    }
-  }
-
-  // Helper for UI consistency
-  Widget _webInput(TextEditingController ctrl, String label, IconData icon, {bool isNum = false}) {
-    return TextFormField(
-      controller: ctrl,
-      enabled: !_isLoading,
-      keyboardType: isNum ? TextInputType.number : TextInputType.text,
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-      validator: (v) => (v == null || v.isEmpty) ? "Required" : null,
-      decoration: _inputDeco(label, icon),
-    );
-  }
-
-  InputDecoration _inputDeco(String label, IconData icon) {
-    return InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon, size: 20, color: const Color(0xFF94A3B8)),
-      labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
-      ),
-      disabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFFF1F5F9)),
-      ),
-      contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
     );
   }
 }
@@ -696,3 +632,5 @@ Widget buildFunnyLoader() {
     },
   );
 }
+
+
