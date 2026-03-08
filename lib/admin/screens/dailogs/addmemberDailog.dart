@@ -519,7 +519,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               isDense: true,
               hint: const Text("Select Mode", style: TextStyle(fontSize: 13)),
               decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
-              items: ["Cash", "GPay", "Bank"].map((e) => DropdownMenuItem(
+              items: ["Cash", "GPay"].map((e) => DropdownMenuItem(
                 value: e,
                 child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               )).toList(),

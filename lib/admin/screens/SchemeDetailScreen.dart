@@ -193,7 +193,6 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
   Widget _buildMemberTable() {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
-    // 1. PRE-PROCESS DATA MAPS
     final Map<String, List<DocumentSnapshot>> memberPaymentHistory = {};
     final Map<String, Map<String, dynamic>> currentMonthPaidMap = {};
 
@@ -201,33 +200,25 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       final pData = p.data() as Map<String, dynamic>? ?? {};
       String mid = (pData['memberId'] ?? "").toString();
       if (mid.isEmpty) continue;
-
       memberPaymentHistory.putIfAbsent(mid, () => []).add(p);
-
-      // Check if paid for the currently selected month
       if ((pData['monthKey'] ?? "").toString() == monthKey) {
         currentMonthPaidMap[mid] = pData;
       }
     }
 
-    // 2. APPLY UI-SIDE FILTERING (This fixes the Status Dropdown)
     final filteredList = _allMembers.where((mDoc) {
       final bool isPaid = currentMonthPaidMap.containsKey(mDoc.id);
-
-      // Status Filter logic
       if (selectedStatus == "Paid") return isPaid;
       if (selectedStatus == "Pending") return !isPaid;
-      return true; // "All"
+      return true;
     }).toList();
 
     final monthlyAmount = _parseNum(widget.schemeData['monthlyAmount'] ?? 0);
     final int totalMonths = int.tryParse(widget.schemeData['totalMonths']?.toString() ?? '0') ?? 0;
 
-    // 3. GENERATE ROWS
     final tableRows = filteredList.map((mDoc) {
       final d = mDoc.data() as Map<String, dynamic>? ?? {};
       final String enrollmentId = mDoc.id;
-      final String masterId = (d['masterId'] ?? "").toString();
       final String memberName = (d['name'] ?? "UNKNOWN").toString();
       final String kuriNo = (d['kuriNumber'] ?? "-").toString();
       final String remark = (d['remark'] ?? "").toString();
@@ -236,7 +227,17 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       final bool isPaid = pMonth != null;
       final mHistory = memberPaymentHistory[enrollmentId] ?? [];
 
-      // --- SPLIT DATA PARSING ---
+      // --- LOGIC: Identify "No Chance" for UI display ---
+      bool isNoChance = false;
+      if (isPaid && pMonth?['paidDate'] != null) {
+        DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
+        int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '10') ?? 10;
+        DateTime drawDateDeadline = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
+        if (pDate.isAfter(drawDateDeadline) && pMonth['monthKey'] == monthKey) {
+          isNoChance = true;
+        }
+      }
+
       List<String> splitAmounts = isPaid ? (pMonth!['splitAmounts']?.toString() ?? pMonth['amount'].toString()).split(", ") : [];
       List<String> modes = isPaid ? (pMonth!['mode'] ?? "Cash").toString().split(", ") : [];
       List<String> collectors = isPaid ? (pMonth!['collectedBy'] ?? "-").toString().split(", ") : [];
@@ -244,28 +245,24 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       String entryUser = isPaid ? (pMonth!['addedByName'] ?? "Admin").toString() : "-";
       String entryTime = "-";
       if (isPaid && pMonth!['paidAt'] != null) {
-        // Show Date + Time for the entry
         entryTime = DateFormat('dd-MM-yy hh:mm a').format((pMonth['paidAt'] as Timestamp).toDate());
       }
 
-      // --- WINNER LOGIC ---
       final Map<String, dynamic> allWinners = widget.schemeData['winners'] != null
-          ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map)
-          : {};
+          ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map) : {};
       String? wonMonthKey;
       allWinners.forEach((key, val) { if (val.toString() == enrollmentId) wonMonthKey = key.toString(); });
       bool isCurrentMonthWinner = wonMonthKey == monthKey;
       bool hasWonInPast = (wonMonthKey != null && wonMonthKey != monthKey);
 
-      // --- FINANCIALS ---
       final totalPaid = mHistory.fold<double>(0.0, (sum, p) => sum + _parseNum(p['amount'] ?? 0));
       final balance = (monthlyAmount * totalMonths) - totalPaid;
 
       return DataRow(
         color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
         cells: [
-          DataCell(Text(kuriNo, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))), // 1
-          DataCell(SizedBox(width: 220, child: Column( // 2
+          DataCell(Text(kuriNo, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+          DataCell(SizedBox(width: 220, child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -273,10 +270,15 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                 if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 14),
                 const SizedBox(width: 4),
                 Expanded(child: Text("${kuriNo.padLeft(3,'0')} - ${memberName.toUpperCase()}",
-                    style: TextStyle(fontSize: 11, fontWeight: isCurrentMonthWinner ? FontWeight.bold : FontWeight.bold))),
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+
+                // WINNER ICON LOGIC
                 IconButton(
-                    icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined, size: 16, color: wonMonthKey != null ? Colors.orange : Colors.grey),
-                    onPressed: hasWonInPast ? null : () => _confirmWinner(enrollmentId, memberName, isPaid)
+                    icon: Icon(wonMonthKey != null ? Icons.emoji_events : Icons.emoji_events_outlined,
+                        size: 16,
+                        color: wonMonthKey != null ? Colors.orange : (isNoChance ? Colors.grey.withOpacity(0.3) : Colors.grey)),
+                    // Pass pMonth into the function to solve the "Undefined name" error
+                    onPressed: (hasWonInPast || isNoChance) ? null : () => _confirmWinner(enrollmentId, memberName, isPaid, pMonth)
                 )
               ]),
               if (remark.isNotEmpty)
@@ -288,11 +290,11 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                 ),
             ],
           ))),
-          DataCell(Text((d['phone'] ?? "-").toString(), style: const TextStyle(fontSize: 12))), // 3
-          DataCell(Text((d['place'] ?? "-").toString(), style: const TextStyle(fontSize: 11))), // 4
-          DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 12))), // 5
-          DataCell(Text("${mHistory.length}/$totalMonths", style: const TextStyle(fontSize: 12))), // 6
-          DataCell(isPaid // 7 (Paid column)
+          DataCell(Text((d['phone'] ?? "-").toString(), style: const TextStyle(fontSize: 12))),
+          DataCell(Text((d['place'] ?? "-").toString(), style: const TextStyle(fontSize: 11))),
+          DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 12))),
+          DataCell(Text("${mHistory.length}/$totalMonths", style: const TextStyle(fontSize: 12))),
+          DataCell(isPaid
               ? Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -301,21 +303,19 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           )
               : const Text("-")
           ),
-          DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance), style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.bold))), // 8
-          DataCell(Container( // 9 (Status column)
+          DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance), style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.bold))),
+          DataCell(Container(
               child: (isPaid || hasWonInPast || isCurrentMonthWinner)
                   ? _buildStatusBadge(isPaid, hasWonInPast, isCurrentMonthWinner, pMonth)
-                  : _buildPayButton(enrollmentId, memberName, masterId)
+                  : _buildPayButton(enrollmentId, memberName, d['masterId'] ?? "")
           )),
-          DataCell( // 10 (Date + Time column)
-              Text(
-                  isPaid && pMonth?['paidDate'] != null
-                      ? DateFormat('dd-MM-yy  hh:mm a').format((pMonth!['paidDate'] as Timestamp).toDate())
-                      : "-",
-                  style: const TextStyle(fontSize: 11)
-              )
-          ),
-          DataCell(isPaid // 11 (Mode column)
+          DataCell(Text(
+              isPaid && pMonth?['paidDate'] != null
+                  ? DateFormat('dd-MM-yy  hh:mm a').format((pMonth!['paidDate'] as Timestamp).toDate())
+                  : "-",
+              style: const TextStyle(fontSize: 11)
+          )),
+          DataCell(isPaid
               ? Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -326,7 +326,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           )
               : const Text("-")
           ),
-          DataCell(isPaid // 12 (Collector column)
+          DataCell(isPaid
               ? Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -334,7 +334,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           )
               : const Text("-")
           ),
-          DataCell(isPaid // 13 (Entry User + Date column)
+          DataCell(isPaid
               ? Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -349,7 +349,6 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
       );
     }).toList();
 
-    // 4. FINAL TABLE RENDERING
     return Expanded(
       child: Scrollbar(
         controller: _verticalScroll,
@@ -359,8 +358,8 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
             scrollDirection: Axis.horizontal,
             child: DataTable(
               headingRowHeight: 40,
-              dataRowMaxHeight: 60, // Height allowed for split line columns
-              columnSpacing: 50,    // Breathing room between columns
+              dataRowMaxHeight: 65,
+              columnSpacing: 60,
               horizontalMargin: 15,
               headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
               border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
@@ -373,7 +372,7 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     );
   }
   Widget _buildStatusBadge(bool isPaid, bool hasWonInPast, bool isCurrentMonthWinner, Map<String, dynamic>? pMonth) {
-    Color statusColor = const Color(0xFFFEE2E2);
+    Color statusColor = const Color(0xFFFEE2E2); // Default Red/Pending
     String statusLabel = "PENDING";
 
     if (hasWonInPast) {
@@ -382,46 +381,49 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     } else if (isCurrentMonthWinner) {
       statusColor = Colors.amber.shade100;
       statusLabel = "WINNER";
-    } else if (isPaid) {
-      DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
+    } else if (isPaid && pMonth != null) {
+      DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+      String paymentMonthKey = pMonth['monthKey']?.toString() ?? "";
+      String currentTableMonthKey = monthKey;
 
-      // 1. Get the actual start date of the scheme from schemeData
-      DateTime schemeStartDate = (widget.schemeData['startMonth'] is Timestamp)
-          ? (widget.schemeData['startMonth'] as Timestamp).toDate()
-          : DateTime.now();
+      // 1. Define Dates
+      int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '10') ?? 10;
+      int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1; // e.g., 8th
 
-      // 2. Define the 1st day of the installment month being viewed
-      DateTime firstDayOfInstallmentMonth = DateTime(selectedMonth.year, selectedMonth.month, 1);
+      DateTime firstDayOfMonth = DateTime(selectedMonth.year, selectedMonth.month, 1);
+      DateTime deadlineDate = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+      DateTime drawDate = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
 
-      int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '') ?? 0;
-      int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
-      DateTime deadline = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+      // --- LOGIC REFINEMENT ---
 
-      // --- UPDATED LOGIC ---
-
-      // Rule A: If payment date is before the scheme even starts = ADVANCE
-      // Rule B: If payment date is before the 1st of the installment month = ADVANCE
-      if (pDate.isBefore(schemeStartDate) || pDate.isBefore(firstDayOfInstallmentMonth)) {
-        statusColor = const Color(0xFFECD907); // Yellow
+      // SCENARIO: ADVANCE
+      if (paymentMonthKey != currentTableMonthKey || pDate.isBefore(firstDayOfMonth)) {
+        statusColor = const Color(0xFFBAE6FD); // Blue
         statusLabel = "ADVANCE";
       }
-      // Rule C: Between 1st and Deadline = ON-TIME
-      else if (pDate.isBefore(deadline.add(const Duration(seconds: 1)))) {
+      // SCENARIO: NO CHANCE (Paid after Draw)
+      else if (pDate.isAfter(drawDate)) {
+        statusColor = Colors.grey.shade300;
+        statusLabel = "LATE\nNO CHANCE";
+      }
+      // SCENARIO: LATE BUT HAS CHANCE (Paid between 8th and 10th)
+      else if (pDate.isAfter(deadlineDate) && pDate.isBefore(drawDate.add(const Duration(seconds: 1)))) {
+        statusColor = Colors.orange.shade200;
+        statusLabel = "LATE\nWITH CHANCE";
+      }
+      // SCENARIO: ON-TIME (Paid before 8th)
+      else {
         statusColor = const Color(0xFF54EA89); // Green
         statusLabel = "ON-TIME";
-      }
-      // Rule D: After Deadline = LATE
-      else {
-        statusColor = const Color(0xFFFB923C); // Orange
-        statusLabel = "LATE";
       }
     }
 
     return Container(
-      width: double.infinity, height: 30, alignment: Alignment.center,
+      width: double.infinity, height: 35, alignment: Alignment.center,
       decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
       child: Text(statusLabel.toUpperCase(),
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black87)),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.black87)),
     );
   }
 
@@ -438,22 +440,50 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     );
   }
 
-  void _confirmWinner(String masterId, String name, bool isPaid) {
+  void _confirmWinner(String enrollmentId, String name, bool isPaid, Map<String, dynamic>? pMonth) {
+    // 1. Basic Check: Must be paid
     if (!isPaid) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Member must pay first."), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Member must pay first."), backgroundColor: Colors.red)
+      );
       return;
     }
 
-    int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '') ?? 0;
+    // 2. LATE / NO CHANCE CHECK
+    // We use the pMonth passed from the table row to check the date
+    if (pMonth != null && pMonth['paidDate'] != null) {
+      DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+      int drawDay = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '10') ?? 10;
+
+      // Create the Draw Date deadline for the selected month
+      DateTime drawDateDeadline = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
+
+      // Block if payment was made AFTER the draw date
+      if (pDate.isAfter(drawDateDeadline)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("LATE PAYMENT: This member has NO CHANCE for this month's draw."),
+              backgroundColor: Colors.black,
+              behavior: SnackBarBehavior.floating,
+            )
+        );
+        return;
+      }
+    }
+
+    // 3. Check if Draw Date has arrived (for current month only)
+    int drawDayVal = int.tryParse(widget.schemeData['kuriDate']?.toString() ?? '10') ?? 10;
     DateTime now = DateTime.now();
-    if (selectedMonth.year == now.year && selectedMonth.month == now.month && now.day < drawDay) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Draw date is Day $drawDay."), backgroundColor: Colors.orange));
+    if (selectedMonth.year == now.year && selectedMonth.month == now.month && now.day < drawDayVal) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Draw date is Day $drawDayVal."), backgroundColor: Colors.orange)
+      );
       return;
     }
 
+    // 4. Confirmation Dialog
     final Map<String, dynamic> existingWinners = widget.schemeData['winners'] != null
         ? Map<String, dynamic>.from(widget.schemeData['winners'] as Map) : {};
-
     bool isReplacement = existingWinners.containsKey(monthKey);
 
     showDialog(
@@ -466,12 +496,46 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           ElevatedButton(
             onPressed: () async {
               final batch = FirebaseFirestore.instance.batch();
-              batch.update(FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId), {'winners.$monthKey': masterId});
-              batch.set(FirebaseFirestore.instance.collection('winners').doc("${widget.schemeId}_$monthKey"), {
-                'schemeId': widget.schemeId, 'monthKey': monthKey, 'memberId': masterId, 'memberName': name, 'updatedAt': FieldValue.serverTimestamp()
+
+              // 1. Database Updates
+              batch.update(FirebaseFirestore.instance.collection('schemes').doc(widget.schemeId), {
+                'winners.$monthKey': enrollmentId
               });
+
+              batch.set(FirebaseFirestore.instance.collection('winners').doc("${widget.schemeId}_$monthKey"), {
+                'schemeId': widget.schemeId,
+                'monthKey': monthKey,
+                'memberId': enrollmentId,
+                'memberName': name,
+                'updatedAt': FieldValue.serverTimestamp()
+              });
+
               await batch.commit();
-              if (mounted) Navigator.pop(context);
+
+              if (mounted) {
+                // 2. CRITICAL: Update local state immediately
+                setState(() {
+                  // Ensure the winners map exists locally before assigning
+                  if (widget.schemeData['winners'] == null) {
+                    widget.schemeData['winners'] = <String, dynamic>{};
+                  }
+                  // Manually set the winner in the local object
+                  widget.schemeData['winners'][monthKey] = enrollmentId;
+                });
+
+                // 3. Close the dialog
+                Navigator.pop(context);
+
+                // 4. Background refresh to stay in sync with server
+                _fetchMembers(isInitial: true);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Winner Marked Successfully"),
+                      backgroundColor: Colors.orange,
+                    )
+                );
+              }
             },
             child: const Text("CONFIRM"),
           )
@@ -501,15 +565,16 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           adminList: adminNames,
           onConfirm: (splits, totalCollected) async {
             try {
-              // 2. Construct the Array Model including Collector ID
+              // 1. Prepare Split Array for Audit
               List<Map<String, dynamic>> splitArray = splits.map((s) => {
                 'collectorName': s['collector'],
-                'collectorId': adminIdMap[s['collector']] ?? "", // Lookup ID from Map
+                'collectorId': adminIdMap[s['collector']] ?? "",
                 'amount': s['amount'],
                 'mode': s['mode'],
                 'date': s['date'],
               }).toList();
 
+              // 2. Add to Firestore
               await FirebaseFirestore.instance.collection('payments').add({
                 'kuriId': widget.schemeData['kuriId'],
                 'schemeId': widget.schemeId,
@@ -517,17 +582,11 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
                 'masterId': masterId,
                 'monthKey': monthKey,
                 'amount': widget.schemeData['monthlyAmount'],
-
-                // For Table View (String based)
                 'splitAmounts': splits.map((s) => s['amount'].toString()).join(", "),
                 'mode': splits.map((s) => s['mode'].toString()).join(", "),
                 'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
-                // Added collectorIds string
                 'collectorIds': splits.map((s) => adminIdMap[s['collector']] ?? "").join(", "),
-
-                // For Audit Report (Array based)
                 'paymentSplits': splitArray,
-
                 'paidDate': Timestamp.fromDate(splits.last['date']),
                 'paidAt': FieldValue.serverTimestamp(),
                 'status': _calculatePaymentStatus(splits.last['date']),
@@ -536,14 +595,26 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
               });
 
               if (mounted) {
-                if (Navigator.canPop(c)) Navigator.pop(c);
+                // 3. CLOSE ONLY THE DIALOG
+                // Navigator.of(c).pop();
+
+                // 4. REFRESH THE CURRENT TABLE
+                // This ensures the "Pay" button turns into a "PAID" badge instantly
                 _fetchMembers(isInitial: true);
+
+                // 5. SUCCESS FEEDBACK
                 ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Payment Successful"), backgroundColor: Colors.green)
+                    const SnackBar(
+                      content: Text("Payment Successful"),
+                      backgroundColor: Colors.green,
+                      duration: Duration(seconds: 2),
+                    )
                 );
               }
             } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
+              );
             }
           },
         )

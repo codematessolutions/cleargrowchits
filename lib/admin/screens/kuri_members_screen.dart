@@ -427,20 +427,51 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               grandTotalPaid += totalPaid;
               grandTotalBalance += balance;
 
-              Color statusBgColor = const Color(0xFFFEE2E2);
+              // --- UPDATED STATUS LOGIC START ---
+              Color statusBgColor = const Color(0xFFFEE2E2); // Default Red/Pending
               String statusLabel = "PENDING";
-              if (hasWonInPast) { statusBgColor = const Color(0xFFEFF6FF); statusLabel = "WON"; }
-              else if (isCurrentMonthWinner) { statusBgColor = Colors.amber.shade100; statusLabel = "WINNER"; }
-              else if (isPaid && pMonth?['paidAt'] != null) {
-                DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
-                DateTime schemeStartDate = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
-                int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
-                int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
-                DateTime deadline = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
-                if (pDate.isBefore(schemeStartDate)) { statusBgColor = const Color(0xFFECD907); statusLabel = "Advance"; }
-                else if (pDate.isBefore(deadline.add(const Duration(seconds: 1)))) { statusBgColor = const Color(0xFF54EA89); statusLabel = "On-Time"; }
-                else { statusBgColor = const Color(0xFFFB923C); statusLabel = "Late"; }
+
+              if (hasWonInPast) {
+                statusBgColor = const Color(0xFFEFF6FF);
+                statusLabel = "WON";
               }
+              else if (isCurrentMonthWinner) {
+                statusBgColor = Colors.amber.shade100;
+                statusLabel = "WINNER";
+              }
+              else if (isPaid && pMonth != null) {
+                DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
+
+                // Define Dates
+                int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '10') ?? 10;
+                int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1; // e.g., 8th
+
+                DateTime firstDayOfMonth = DateTime(selectedMonth.year, selectedMonth.month, 1);
+                DateTime deadlineDate = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+                DateTime drawDate = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
+
+                // 1. Advance (Paid before the month started)
+                if (pDate.isBefore(firstDayOfMonth)) {
+                  statusBgColor = const Color(0xFFBAE6FD);
+                  statusLabel = "ADVANCE";
+                }
+                // 2. On-Time (Paid on or before Draw Date - 2)
+                else if (pDate.isBefore(deadlineDate.add(const Duration(seconds: 1)))) {
+                  statusBgColor = const Color(0xFF54EA89);
+                  statusLabel = "ON-TIME";
+                }
+                // 3. Late No Chance (Paid after Draw Date)
+                else if (pDate.isAfter(drawDate)) {
+                  statusBgColor = Colors.grey.shade300;
+                  statusLabel = "LATE\nNO CHANCE";
+                }
+                // 4. Late With Chance (Paid between Deadline and Draw Date)
+                else {
+                  statusBgColor = const Color(0xFFFB923C);
+                  statusLabel = "LATE\nWITH CHANCE";
+                }
+              }
+              // --- UPDATED STATUS LOGIC END ---
 
               return DataRow(
                 color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
