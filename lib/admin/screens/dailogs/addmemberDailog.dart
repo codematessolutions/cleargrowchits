@@ -16,27 +16,45 @@ class AddMemberDialog extends StatefulWidget {
   @override State<AddMemberDialog> createState() => _AddMemberDialogState();
 }
 
+
+
+
+
 class _AddMemberDialogState extends State<AddMemberDialog> {
-  final _n = TextEditingController();
-  final _p = TextEditingController();
-  final _pl = TextEditingController();
-  final _kn = TextEditingController(); // NEW: Kuri Number Controller
+  // Controllers
+  final _n = TextEditingController(); // Name
+  final _p = TextEditingController(); // Phone
+  final _pl = TextEditingController(); // Place
+
   String? _selectedCareOf;
+  bool _isLoading = false; // Loader state
+
+  // GlobalKey for form validation
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _n.dispose();
+    _p.dispose();
+    _pl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Local GlobalKey for validation
-    final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
-        width: 550, // Comfortable web width
+        width: 550,
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 30, offset: const Offset(0, 15))
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 30,
+              offset: const Offset(0, 15),
+            )
           ],
         ),
         child: Column(
@@ -47,7 +65,10 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
               decoration: const BoxDecoration(
                 color: Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
                 border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
               ),
               child: const Row(
@@ -71,18 +92,19 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text("PERSONAL INFORMATION",
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8), letterSpacing: 1.2)),
+                      const Text(
+                        "PERSONAL INFORMATION",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF94A3B8),
+                          letterSpacing: 1.2,
+                        ),
+                      ),
                       const SizedBox(height: 20),
 
-                      // Kuri Number & Name Row
-                      Row(
-                        children: [
-                          Expanded(flex: 1, child: _webInput(_kn, "Kuri No.", Icons.pin, isNum: true)),
-                          const SizedBox(width: 16),
-                          Expanded(flex: 2, child: _webInput(_n, "Full Name", Icons.badge_outlined)),
-                        ],
-                      ),
+                      // Name (Full Width)
+                      _webInput(_n, "Full Name", Icons.badge_outlined),
                       const SizedBox(height: 20),
 
                       // Phone & Place Row
@@ -95,25 +117,41 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
                       ),
                       const SizedBox(height: 24),
 
-                      const Text("ADMINISTRATIVE",
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8), letterSpacing: 1.2)),
+                      const Text(
+                        "ADMINISTRATIVE",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF94A3B8),
+                          letterSpacing: 1.2,
+                        ),
+                      ),
                       const SizedBox(height: 16),
 
                       // Care Of Stream Dropdown
                       StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance.collection('staff_admins').orderBy('name').snapshots(),
+                        stream: FirebaseFirestore.instance
+                            .collection('staff_admins')
+                            .orderBy('name')
+                            .snapshots(),
                         builder: (context, snapshot) {
-                          if (!snapshot.hasData) return const LinearProgressIndicator(color: Color(0xFF6366F1));
+                          if (!snapshot.hasData) {
+                            return const LinearProgressIndicator(color: Color(0xFF6366F1));
+                          }
 
                           return DropdownButtonFormField<String>(
                             value: _selectedCareOf,
                             decoration: _inputDeco("Care Of", Icons.support_agent),
                             validator: (v) => v == null ? "Required" : null,
-                            items: snapshot.data!.docs.map((doc) => DropdownMenuItem(
+                            items: snapshot.data!.docs.map((doc) {
+                              return DropdownMenuItem(
                                 value: doc['name'].toString(),
-                                child: Text(doc['name'], style: const TextStyle(fontSize: 14))
-                            )).toList(),
-                            onChanged: (v) => setState(() => _selectedCareOf = v),
+                                child: Text(doc['name'], style: const TextStyle(fontSize: 14)),
+                              );
+                            }).toList(),
+                            onChanged: _isLoading
+                                ? null
+                                : (v) => setState(() => _selectedCareOf = v),
                           );
                         },
                       ),
@@ -133,8 +171,11 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("Discard", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
+                    onPressed: _isLoading ? null : () => Navigator.pop(context),
+                    child: const Text(
+                      "Discard",
+                      style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
+                    ),
                   ),
                   const SizedBox(width: 16),
                   ElevatedButton(
@@ -145,92 +186,20 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
-                    // onPressed: () async {
-                    //   // Use a Batch for high performance (Max 500 operations per batch)
-                    //   final WriteBatch batch = FirebaseFirestore.instance.batch();
-                    //   final collection = FirebaseFirestore.instance.collection('members');
-                    //
-                    //   final List<String> firstNames = ["Rahul", "Anas", "Sajid", "Deepak", "Vinu", "Arun", "Sree", "Nithin"];
-                    //   final List<String> surNames = ["K", "P", "M", "V", "C", "T", "S", "R"];
-                    //   final List<String> locations = ["MANJERI", "MALAPPURAM", "CALICUT", "NILAMBUR", "PERINTHALMANNA"];
-                    //
-                    //   // Show a loading indicator if you have one
-                    //   // EasyLoading.show(status: 'Adding 400 test members...');
-                    //
-                    //   for (int i = 1; i <= 400; i++) {
-                    //     final docRef = collection.doc(); // Generate a new ID
-                    //
-                    //     // Pick random data based on index
-                    //     String name = "${firstNames[i % firstNames.length]} ${surNames[i % surNames.length]} $i";
-                    //     String place = locations[i % locations.length];
-                    //
-                    //     batch.set(docRef, {
-                    //       'memberId': docRef.id,
-                    //       'schemeId': widget.schemeId,
-                    //       'schemeName': widget.schemeName,
-                    //       'kuriId': widget.kuriId,
-                    //       'kuriName': widget.kuriName,
-                    //       'kuriNumber': i, // Numeric string for sorting tests
-                    //       'name': name.toUpperCase(),
-                    //       'phone': "9847${i.toString().padLeft(6, '0')}", // Unique phone numbers
-                    //       'place': place,
-                    //       'careOf': "Self",
-                    //       'addedById': widget.userId,
-                    //       'addedByName': widget.userName,
-                    //       'isTestData': true, // Helpful to delete them later in one go
-                    //     });
-                    //   }
-                    //
-                    //   // Submit all 400 at once
-                    //   await batch.commit();
-                    //
-                    //   // EasyLoading.dismiss();
-                    //   Navigator.pop(context);
-                    // },
-
-
-                    onPressed: () async {
-                      if (_formKey.currentState!.validate()) {
-                        // 1. Show a loading state if possible, or disable the button
-                        // to prevent double-clicks creating duplicate members.
-
-                        try {
-                          final docRef = FirebaseFirestore.instance.collection('members').doc();
-
-                          await docRef.set({
-                            'memberId': docRef.id,
-                            'schemeId': widget.schemeId,
-                            'schemeName': widget.schemeName,
-                            'kuriId': widget.kuriId,
-                            'kuriName': widget.kuriName,
-
-                            // CHANGE: Convert to int so sorting/filtering works correctly
-                            'kuriNumber': int.tryParse(_kn.text) ?? 0,
-
-                            'name': _n.text.toUpperCase().trim(), // Added trim() to remove accidental spaces
-                            'phone': _p.text.trim(),
-                            'place': _pl.text.toUpperCase().trim(),
-                            'careOf': _selectedCareOf,
-                            'addedById': widget.userId,
-                            'addedByName': widget.userName,
-                            'createdAt': FieldValue.serverTimestamp(), // Useful for audit logs
-                          });
-
-                          if (context.mounted) {
-                            // We pass 'true' so the main screen knows a member was actually added
-                            Navigator.pop(context, true);
-                          }
-                        } catch (e) {
-                          // Show an error if the internet fails
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Error saving: $e"), backgroundColor: Colors.red),
-                            );
-                          }
-                        }
-                      }
-                    },
-                    child: const Text("SAVE MEMBER", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                    onPressed: _isLoading ? null : _handleSave,
+                    child: _isLoading
+                        ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                        : const Text(
+                      "SAVE MEMBER",
+                      style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                    ),
                   )
                 ],
               ),
@@ -241,10 +210,73 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
     );
   }
 
-// Helper for UI consistency
+  // Refactored Save Logic
+  Future<void> _handleSave() async {
+    if (_formKey.currentState!.validate()) {
+      setState(() => _isLoading = true);
+
+      try {
+        // 1. Fetch the last used Kuri Number for this specific Kuri
+        final lastMemberQuery = await FirebaseFirestore.instance
+            .collection('members')
+            .where('kuriId', isEqualTo: widget.kuriId)
+            .orderBy('kuriNumber', descending: true)
+            .limit(1)
+            .get();
+
+        int nextKuriNumber = 1; // Default starting number
+
+        if (lastMemberQuery.docs.isNotEmpty) {
+          // Increment the highest found number by 1
+          int lastNumber = lastMemberQuery.docs.first['kuriNumber'] as int;
+          nextKuriNumber = lastNumber + 1;
+        }
+
+        // 2. Save the new member
+        final docRef = FirebaseFirestore.instance.collection('members').doc();
+
+        await docRef.set({
+          'memberId': docRef.id,
+          'schemeId': widget.schemeId,
+          'schemeName': widget.schemeName,
+          'kuriId': widget.kuriId,
+          'kuriName': widget.kuriName,
+
+          // AUTOMATIC INCREMENTED VALUE
+          'kuriNumber': nextKuriNumber,
+
+          'name': _n.text.toUpperCase().trim(),
+          'phone': _p.text.trim(),
+          'place': _pl.text.toUpperCase().trim(),
+          'careOf': _selectedCareOf,
+          'addedById': widget.userId,
+          'addedByName': widget.userName,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        if (mounted) {
+          Navigator.pop(context, true);
+        }
+      } catch (e) {
+        debugPrint("Error saving member: $e");
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Error: $e"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  // Helper for UI consistency
   Widget _webInput(TextEditingController ctrl, String label, IconData icon, {bool isNum = false}) {
     return TextFormField(
       controller: ctrl,
+      enabled: !_isLoading,
       keyboardType: isNum ? TextInputType.number : TextInputType.text,
       style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
       validator: (v) => (v == null || v.isEmpty) ? "Required" : null,
@@ -257,14 +289,26 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
       labelText: label,
       prefixIcon: Icon(icon, size: 20, color: const Color(0xFF94A3B8)),
       labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
+      ),
+      disabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFF1F5F9)),
+      ),
       contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
     );
   }
 }
-
 
 
 class MarkPaymentDialog extends StatefulWidget {
