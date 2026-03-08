@@ -2,24 +2,24 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../SchemeDetailScreen.dart';
+class SchemeTheme {
+  static const primaryBlue = Color(0xFF1E3A8A);
+}
 
 class SelectFromMasterDialog extends StatefulWidget {
-  final String schemeId;
-  final String schemeName;
   final String kuriId;
   final String kuriName;
   final String userId;
   final String userName;
+  final Map<String, dynamic> kuriData; // Used to get dynamic start/end dates
 
   const SelectFromMasterDialog({
     super.key,
-    required this.schemeId,
-    required this.schemeName,
     required this.kuriId,
     required this.kuriName,
     required this.userId,
     required this.userName,
+    required this.kuriData,
   });
 
   @override
@@ -28,224 +28,247 @@ class SelectFromMasterDialog extends StatefulWidget {
 
 class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _amountController = TextEditingController(text: "5000");
   final TextEditingController _remarkController = TextEditingController();
-  List<DocumentSnapshot> _searchResults = [];
 
-  // NEW: List to hold multiple selected members
+  List<DocumentSnapshot> _searchResults = [];
   final List<DocumentSnapshot> _selectedMembers = [];
 
   bool _isSearching = false;
   bool _isSaving = false;
 
-  // Search Logic (Improved for Name & Phone)
+  late DateTime kuriStartDate;
+  late DateTime kuriEndDate;
+  late DateTime selectedJoiningMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    // Dynamic date parsing from your Kuri configuration
+    kuriStartDate = _parseDate(widget.kuriData['startDate']) ?? DateTime(2025, 3);
+    kuriEndDate = _parseDate(widget.kuriData['endDate']) ?? DateTime(2025, 12);
+
+    // Initialize joining month to Kuri start month
+    selectedJoiningMonth = kuriStartDate;
+  }
+
+  // Helper to handle both Timestamp and String (yyyy_MM) formats
+  DateTime? _parseDate(dynamic date) {
+    if (date == null) return null;
+    if (date is Timestamp) return date.toDate();
+    if (date is String) {
+      try {
+        return DateFormat('yyyy_MM').parse(date);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // LOGIC: (End Year - Start Year) * 12 + (End Month - Start Month) + 1
+  int get calculatedInstallments {
+    int months = ((kuriEndDate.year - selectedJoiningMonth.year) * 12) +
+        (kuriEndDate.month - selectedJoiningMonth.month) + 1;
+    return months > 0 ? months : 0;
+  }
+
   Future<void> _performSearch() async {
     String term = _searchController.text.trim();
-
     if (term.isEmpty) return;
 
-    setState(() {
-      _isSearching = true;
-      _searchResults = [];
-    });
-
+    setState(() => _isSearching = true);
     try {
-      QuerySnapshot query;
-      if (RegExp(r'^[0-9]+$').hasMatch(term)) {
-        query = await FirebaseFirestore.instance
-            .collection('master_members')
-            .where('phone', isEqualTo: term)
-            .get();
-      } else {
-        // 1. Standardize the term to Uppercase
-        String searchKey = term.toUpperCase();
-
-        // 2. Perform the Range Query
-        // This looks for any name starting with the searchKey
-        query = await FirebaseFirestore.instance
-            .collection('master_members')
-            .orderBy('name') // Crucial for range queries
-            .startAt([searchKey])
-            .endAt(['$searchKey\uf8ff'])
-            .limit(15)
-            .get();
-      }
-
+      var snapshot = await FirebaseFirestore.instance.collection('master_members').get();
       setState(() {
-        _searchResults = query.docs;
-        _isSearching = false;
+        _searchResults = snapshot.docs.where((doc) {
+          String name = (doc['name'] ?? "").toString().toLowerCase();
+          String phone = (doc['phone'] ?? "").toString();
+          return name.contains(term.toLowerCase()) || phone.contains(term);
+        }).toList();
       });
     } catch (e) {
-      print("Search Error: $e"); // Check your debug console for index errors
+      debugPrint("Search error: $e");
+    } finally {
       setState(() => _isSearching = false);
     }
   }
-  // Toggle selection
-  void _toggleMember(DocumentSnapshot doc) {
-    setState(() {
-      if (_selectedMembers.any((m) => m.id == doc.id)) {
-        _selectedMembers.removeWhere((m) => m.id == doc.id);
-      } else {
-        _selectedMembers.add(doc);
-      }
-    });
-  }
 
-  // --- BATCH SAVE LOGIC ---
-  Future<void> _handleBulkEnrollment() async {
+  Future<void> _saveMembers() async {
     if (_selectedMembers.isEmpty) return;
     setState(() => _isSaving = true);
 
-    try {
-      final WriteBatch batch = FirebaseFirestore.instance.batch();
+    final batch = FirebaseFirestore.instance.batch();
 
-      // --- CHANGE: Query by kuriId instead of schemeId ---
-      // This counts every member in every scheme under this Kuri
-      final existingCountSnap = await FirebaseFirestore.instance
-          .collection('members')
+    try {
+      // 1. Get current count to generate sequential Kuri Numbers
+      QuerySnapshot existingEnrollments = await FirebaseFirestore.instance
+          .collection('enrollments')
           .where('kuriId', isEqualTo: widget.kuriId)
           .get();
 
-      int currentKuriCount = existingCountSnap.docs.length;
+      int currentTotal = existingEnrollments.docs.length;
 
-      for (var masterDoc in _selectedMembers) {
-        currentKuriCount++; // Increment based on total Kuri strength
-        Map<String, dynamic> mData = masterDoc.data() as Map<String, dynamic>? ?? {};
+      for (var memberDoc in _selectedMembers) {
+        currentTotal++; // Increment for each new enrollment
 
-        DocumentReference newMemberRef = FirebaseFirestore.instance.collection('members').doc();
+        final data = memberDoc.data() as Map<String, dynamic>;
 
-        batch.set(newMemberRef, {
-          'memberId': newMemberRef.id,
-          'masterId': masterDoc.id,
-          'schemeId': widget.schemeId,
-          'schemeName': widget.schemeName,
+        // We use a timestamp-based ID to allow the same member to join twice
+        final String uniqueId = "${widget.kuriId}_${memberDoc.id}_${DateTime.now().millisecondsSinceEpoch}";
+
+        batch.set(FirebaseFirestore.instance.collection('enrollments').doc(uniqueId), {
           'kuriId': widget.kuriId,
           'kuriName': widget.kuriName,
-          'kuriNumber': currentKuriCount, // Global Kuri-wide Number
-          'name': (mData['name'] ?? "Unknown").toString().toUpperCase(),
-          'phone': (mData['phone'] ?? "").toString(),
-          'place': (mData['place'] ?? "").toString(),
+          'masterId': memberDoc.id,
+          'name': data['name'],
+          'phone': data['phone'],
+          'place': data['place'],
+          'kuriNumber': currentTotal.toString().padLeft(3, '0'), // Automatically 001, 002...
           'remark': _remarkController.text.trim(),
-          'addedById': widget.userId,
+          'monthlyAmount': double.tryParse(_amountController.text) ?? 5000.0,
+          'totalMonths': calculatedInstallments,
+          'joiningMonth': DateFormat('yyyy_MM').format(selectedJoiningMonth),
+          'kuriEndDate': Timestamp.fromDate(kuriEndDate),
+          'enrolledAt': FieldValue.serverTimestamp(),
+          'addedBy': widget.userId,
           'addedByName': widget.userName,
-          'createdAt': FieldValue.serverTimestamp(),
         });
       }
 
       await batch.commit();
-      _remarkController.clear();
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      if (mounted) {
-        setState(() => _isSaving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      setState(() => _isSaving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        width: 600,
-        padding: const EdgeInsets.all(24),
+    return AlertDialog(
+      title: const Text("Enroll Members",
+          style: TextStyle(fontWeight: FontWeight.bold, color: SchemeTheme.primaryBlue)),
+      content: SizedBox(
+        width: 500,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("BULK ENROLL MEMBERS", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: Color(0xFF1E3A8A))),
-            const SizedBox(height: 20),
-
-            // Search Input
-            TextField(
-              controller: _searchController,
-              onSubmitted: (_) => _performSearch(),
-              decoration: InputDecoration(
-                hintText: "Search Name or Phone...",
-                suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _performSearch),
-                filled: true,
-                fillColor: Colors.grey.shade100,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            // Amount and Month selection
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _amountController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                        labelText: "Amount",
+                        prefixText: "₹",
+                        border: OutlineInputBorder()
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: InkWell(
+                    onTap: () async {
+                      final DateTime? picked = await showDatePicker(
+                        context: context,
+                        initialDate: selectedJoiningMonth,
+                        firstDate: kuriStartDate,
+                        lastDate: kuriEndDate,
+                      );
+                      if (picked != null) setState(() => selectedJoiningMonth = picked);
+                    },
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                          labelText: "Start Month",
+                          border: OutlineInputBorder()
+                      ),
+                      child: Text(DateFormat('MMM yyyy').format(selectedJoiningMonth)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Result indicator (e.g., 10 Months)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8)
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.info_outline, size: 18, color: Colors.blue),
+                  const SizedBox(width: 10),
+                  Text(
+                    "Duration: $calculatedInstallments Months (Ends ${DateFormat('MMM yyyy').format(kuriEndDate)})",
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                  ),
+                ],
               ),
             ),
-
-            const SizedBox(height: 15),
-
-            // Search Results List
-            Container(
-              height: 250,
-              decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade200), borderRadius: BorderRadius.circular(12)),
-              child: _isSearching
-                  ? const Center(child: CircularProgressIndicator())
-                  : _searchResults.isEmpty
-                  ? const Center(child: Text("Search and select members"))
+            const Divider(height: 30),
+            // Search field
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: "Search Name or Phone",
+                suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _performSearch),
+                border: const OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => _performSearch(),
+            ),
+            if (_isSearching) const LinearProgressIndicator(),
+            // Results list
+            const SizedBox(height: 10),
+            Flexible(
+              child: _searchResults.isEmpty
+                  ? const Padding(padding: EdgeInsets.all(20), child: Text("Search for members to add"))
                   : ListView.builder(
+                shrinkWrap: true,
                 itemCount: _searchResults.length,
                 itemBuilder: (context, index) {
-                  var m = _searchResults[index];
-                  var d = m.data() as Map<String, dynamic>;
-                  bool isChecked = _selectedMembers.any((sel) => sel.id == m.id);
+                  final doc = _searchResults[index];
+                  final isSelected = _selectedMembers.contains(doc);
                   return CheckboxListTile(
-                    value: isChecked,
-                    title: Text((d['name'] ?? "").toString().toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                    subtitle: Text("${d['phone']} • ${d['place']}"),
-                    onChanged: (_) => _toggleMember(m),
+                    title: Text(doc['name'].toString().toUpperCase()),
+                    subtitle: Text("${doc['phone']} | ${doc['place']}"),
+                    value: isSelected,
+                    onChanged: (val) {
+                      setState(() {
+                        val == true ? _selectedMembers.add(doc) : _selectedMembers.remove(doc);
+                      });
+                    },
                   );
                 },
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            // --- SELECTED MEMBERS CHIPS (Queue Area) ---
-            if (_selectedMembers.isNotEmpty) ...[
-              const Align(alignment: Alignment.centerLeft, child: Text("Selected to add:", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 40,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: _selectedMembers.map((m) => Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: Chip(
-                      label: Text((m.data() as Map)['name'].toString().split(' ')[0]),
-                      onDeleted: () => _toggleMember(m),
-                      deleteIconColor: Colors.red,
-                      backgroundColor: Colors.blue.shade50,
-                    ),
-                  )).toList(),
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 24),
-
-            // Buttons
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E3A8A),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  onPressed: (_selectedMembers.isEmpty || _isSaving) ? null : _handleBulkEnrollment,
-                  child: _isSaving
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : Text("ENROLL ${_selectedMembers.length} MEMBERS"),
-                ),
-              ],
-            )
+            const SizedBox(height: 10),
+            TextField(
+              controller: _remarkController,
+              decoration: const InputDecoration(labelText: "Remark (Optional)", border: OutlineInputBorder()),
+            ),
           ],
         ),
       ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+        ElevatedButton(
+          onPressed: (_selectedMembers.isEmpty || _isSaving) ? null : _saveMembers,
+          style: ElevatedButton.styleFrom(backgroundColor: SchemeTheme.primaryBlue),
+          child: _isSaving
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              : Text("ENROLL (${_selectedMembers.length})"),
+        ),
+      ],
     );
   }
 }
-
 
 class MarkPaymentDialog extends StatefulWidget {
   final String memberName;

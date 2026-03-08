@@ -5,6 +5,10 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+
+// Ensure the path to your updated dialog is correct
+import 'dailogs/addmemberDailog.dart';
+
 class SchemeTheme {
   static const primaryBlue = Color(0xFF1E3A8A);
 }
@@ -32,89 +36,77 @@ class KuriMembersScreen extends StatefulWidget {
 }
 
 class _KuriMembersScreenState extends State<KuriMembersScreen> {
-  // --- DATA & PAGINATION ---
   List<DocumentSnapshot> _allMembers = [];
   bool _isLoading = true;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   DocumentSnapshot? _lastDocument;
-  final ScrollController _verticalScroll = ScrollController();
-  final TextEditingController _searchController = TextEditingController();
 
-  // --- FILTERS ---
   String searchQuery = "";
   String selectedStatus = "All";
-  late DateTime selectedMonth;
+  DateTime selectedMonth = DateTime.now();
+  String get monthKey => DateFormat('yyyy_MM').format(selectedMonth);
+
+  final ScrollController _verticalScroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    selectedMonth = DateTime(now.year, now.month);
     _fetchMembers(isInitial: true);
 
     _verticalScroll.addListener(() {
-      if (_verticalScroll.position.pixels >= _verticalScroll.position.maxScrollExtent - 300) {
-        if (!_isLoadingMore && _hasMore) _fetchMembers();
+      // Trigger when scrolled 90% of the way down
+      if (_verticalScroll.position.pixels >= _verticalScroll.position.maxScrollExtent * 0.9) {
+        if (!_isLoadingMore && _hasMore) {
+          _fetchMembers(isInitial: false);
+        }
       }
     });
   }
 
-  @override
-  void dispose() {
-    _verticalScroll.dispose();
-    _searchController.dispose();
-    super.dispose();
+  double _parseNum(dynamic val) {
+    if (val == null) return 0.0;
+    if (val is num) return val.toDouble();
+    return double.tryParse(val.toString()) ?? 0.0;
   }
-
-  String get monthKey => DateFormat('yyyy_MM').format(selectedMonth);
-
-  double _parseNum(dynamic val) =>
-      val is num ? val.toDouble() : double.tryParse(val.toString()) ?? 0.0;
 
   // --- CORE FETCH LOGIC ---
   Future<void> _fetchMembers({bool isInitial = false}) async {
+    // Prevent multiple simultaneous fetches
+    if (_isLoadingMore || (_isLoading && !isInitial)) return;
+
     if (isInitial) {
       setState(() {
         _isLoading = true;
-        _allMembers = []; // Clear existing list for fresh fetch
+        _allMembers = [];
         _lastDocument = null;
         _hasMore = true;
       });
+    } else {
+      if (!_hasMore) return; // Stop if no more data to load
+      setState(() => _isLoadingMore = true);
     }
 
-    // Prevent redundant calls
-    if (!_hasMore || (_isLoadingMore && !isInitial)) return;
-    if (!isInitial) setState(() => _isLoadingMore = true);
-
     try {
-      // Base Query: Filter by the entire Kuri
       Query query = FirebaseFirestore.instance
-          .collection('members')
+          .collection('enrollments')
           .where('kuriId', isEqualTo: widget.kuriId);
 
       if (searchQuery.isNotEmpty) {
-        final searchNum = int.tryParse(searchQuery);
-        if (searchNum != null) {
-          // 1. Search by Unique Kuri Number (Direct match)
-          query = query.where('kuriNumber', isEqualTo: searchNum);
-        } else {
-          // 2. Search by Name (Range filter)
-          String searchUpper = searchQuery.toUpperCase();
-          query = query
-              .where('name', isGreaterThanOrEqualTo: searchUpper)
-              .where('name', isLessThanOrEqualTo: '$searchUpper\uf8ff')
-              .orderBy('name');
-        }
+        // Note: Ensure your data in Firestore is stored in UPPERCASE for this to work
+        String searchUpper = searchQuery.toUpperCase();
+        query = query
+            .where('name', isGreaterThanOrEqualTo: searchUpper)
+            .where('name', isLessThanOrEqualTo: '$searchUpper\uf8ff')
+            .orderBy('name');
       } else {
-        // 3. Default View: Order by the unique Kuri-wide Number
         query = query.orderBy('kuriNumber', descending: false);
       }
 
+      // Cost-efficient limit
       const int fetchLimit = 20;
       query = query.limit(fetchLimit);
 
-      // Pagination logic
       if (_lastDocument != null && !isInitial) {
         query = query.startAfterDocument(_lastDocument!);
       }
@@ -123,13 +115,13 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
       if (mounted) {
         setState(() {
-          // If it's a new search or refresh, replace the list; otherwise, append
           if (isInitial) {
             _allMembers = snap.docs;
           } else {
             _allMembers.addAll(snap.docs);
           }
 
+          // If we got fewer than 20, we reached the end
           _hasMore = snap.docs.length == fetchLimit;
           if (snap.docs.isNotEmpty) _lastDocument = snap.docs.last;
 
@@ -139,39 +131,46 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       }
     } catch (e) {
       debugPrint("Firestore Error: $e");
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _isLoadingMore = false;
-          _hasMore = false;
-        });
-      }
+      if (mounted) setState(() {
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
     }
+  }
+  void _showAddMember() async {
+    final bool? saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => SelectFromMasterDialog(
+        kuriId: widget.kuriId,
+        kuriName: widget.kuriName,
+        userId: widget.userId,
+        userName: widget.userName,
+        kuriData: widget.kuriData,
+      ),
+    );
+    if (saved == true) _fetchMembers(isInitial: true);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
-        elevation: 0,
+        title: Text("${widget.kuriName} Management"),
         backgroundColor: SchemeTheme.primaryBlue,
         foregroundColor: Colors.white,
-        title: Text(widget.kuriName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.picture_as_pdf_rounded),
-            onPressed: _generateMonthlyPDF, // <--- Add this
-            tooltip: "Generate Monthly Report",
-          ),
-          const SizedBox(width: 10),
-        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddMember,
+        label: const Text("Enroll Member",style: TextStyle(color: Colors.white),),
+        icon: const Icon(Icons.person_add_alt_1,color: Colors.white,),
+        backgroundColor: SchemeTheme.primaryBlue,
       ),
       body: Column(
         children: [
           _buildDetailRibbon(),
-          _buildFilterBar(),
+          _buildSearchAndFilters(),
           _buildMonthNavigator(),
+
           _buildMemberTableContent(),
         ],
       ),
@@ -182,13 +181,23 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   Widget _buildDetailRibbon() {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance.collection('kuris').doc(widget.kuriId).snapshots(),
       builder: (context, kSnap) {
         if (!kSnap.hasData) return const SizedBox(height: 35);
         var kuriData = kSnap.data!.data() as Map<String, dynamic>;
+
+        // Format Start and End Dates
+        String startStr = kuriData['startMonth'] != null
+            ? DateFormat('MMM yy').format((kuriData['startMonth'] as Timestamp).toDate())
+            : "-";
+        String endStr = kuriData['endMonth'] != null
+            ? DateFormat('MMM yy').format((kuriData['endMonth'] as Timestamp).toDate())
+            : "-";
+
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('members').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
+          stream: FirebaseFirestore.instance.collection('enrollments').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
           builder: (context, mSnap) {
             return StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('payments')
@@ -197,6 +206,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               builder: (context, pSnap) {
                 final totalMembers = mSnap.data?.docs.length ?? 0;
                 final paidMembers = pSnap.data?.docs.length ?? 0;
+
                 return Container(
                   height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
                   child: SingleChildScrollView(
@@ -205,12 +215,17 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                     child: Row(
                       children: [
                         _compactItem("KURI", widget.kuriName.toUpperCase(), isTitle: true),
-                        _vDivider(),
-                        _compactItem("MONTHLY", currencyFormat.format(_parseNum(kuriData['monthlyAmount']))),
+
+
                         _vDivider(),
                         _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
                         _vDivider(),
-                        _compactItem("DRAW DATE", kuriData['kuriDate']?.toString() ?? "15"),
+                        _compactItem("DRAW DATE", kuriData['kuriDate']?.toString() ?? ""),
+                        _vDivider(),
+                        // Added Start and End Dates at the end
+                        _compactItem("START", startStr),
+                        _vDivider(),
+                        _compactItem("END", endStr),
                       ],
                     ),
                   ),
@@ -223,74 +238,46 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
-  Widget _buildFilterBar() {
+  Widget _buildSearchAndFilters() {
     return Container(
-      height: 44,
-      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      padding: const EdgeInsets.only(left: 12),
-      decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade200)
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      color: Colors.white,
       child: Row(
         children: [
           Expanded(
-            flex: 4,
-            child: TextField(
-              controller: _searchController,
-              style: const TextStyle(fontSize: 13),
-              textAlign: TextAlign.center,
-              decoration: InputDecoration(
-                hintText: "Name or Kuri No...",
-                hintStyle: const TextStyle(fontSize: 13, color: Colors.black54),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                prefixIcon: const SizedBox(width: 48),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.search, color: SchemeTheme.primaryBlue, size: 20),
-                  onPressed: () {
-                    setState(() => searchQuery = _searchController.text.trim());
-                    _fetchMembers(isInitial: true);
-                  },
+            flex: 3,
+            child: Container(
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: TextField(
+                onChanged: (val) => searchQuery = val,
+                onSubmitted: (val) {
+                  searchQuery = val;
+                  _fetchMembers(isInitial: true);
+                },
+                decoration: InputDecoration(
+                  hintText: "Search name...",
+                  prefixIcon: const Icon(Icons.person, size: 20),
+                  // MANUAL SEARCH BUTTON
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.search, color: SchemeTheme.primaryBlue),
+                    onPressed: () => _fetchMembers(isInitial: true),
+                  ),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.only(top: 7),
                 ),
               ),
-              onSubmitted: (v) {
-                setState(() => searchQuery = v.trim());
-                _fetchMembers(isInitial: true);
-              },
             ),
           ),
-          VerticalDivider(color: Colors.grey.shade200, indent: 10, endIndent: 10, thickness: 1),
-          Expanded(
-              flex: 2,
-              child: _buildCompactBox(
-                  label: "Status",
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                        value: selectedStatus, isExpanded: true,
-                        icon: Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: Colors.grey.shade500),
-                        style: const TextStyle(fontSize: 13, color: Colors.black87, fontWeight: FontWeight.w500),
-                        items: ["All", "Paid", "Pending"].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                        onChanged: (v) {
-                          setState(() {
-                            selectedStatus = v!;
-                            if (_verticalScroll.hasClients) _verticalScroll.jumpTo(0);
-                          });
-                          _fetchMembers(isInitial: true);
-                        }
-                    ),
-                  )
-              )
-          ),
-          IconButton(
-              onPressed: () {
-                _searchController.clear();
-                setState(() { selectedStatus = "All"; searchQuery = ""; });
-                _fetchMembers(isInitial: true);
-              },
-              icon: const Icon(Icons.refresh, size: 18, color: Colors.grey)
+          const SizedBox(width: 20),
+          DropdownButton<String>(
+            value: selectedStatus,
+            onChanged: (val) => setState(() => selectedStatus = val!),
+            items: ["All", "Paid", "Pending"].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
           ),
         ],
       ),
@@ -309,32 +296,59 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     if (allMonths.isEmpty) return const SizedBox.shrink();
 
     return Container(
-      height: 70, margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: Colors.grey.shade200))),
+      height: 60,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+      ),
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         itemCount: allMonths.length,
         itemBuilder: (context, index) {
           DateTime m = allMonths[index];
           bool isSelected = m.year == selectedMonth.year && m.month == selectedMonth.month;
+
           return Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 8),
             child: InkWell(
               onTap: () => setState(() => selectedMonth = m),
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(30),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250), width: 100,
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: isSelected ? SchemeTheme.primaryBlue : Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: isSelected ? SchemeTheme.primaryBlue : Colors.grey.shade200, width: 1.5),
+                  color: isSelected ? SchemeTheme.primaryBlue : Colors.white,
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: isSelected
+                      ? [BoxShadow(color: SchemeTheme.primaryBlue.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
+                      : [],
+                  border: Border.all(
+                    color: isSelected ? SchemeTheme.primaryBlue : Colors.grey.shade300,
+                    width: 1,
+                  ),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                child: Row(
                   children: [
-                    Text(DateFormat('MMM').format(m).toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSelected ? Colors.white70 : Colors.blueGrey.shade400)),
-                    Text(DateFormat('yyyy').format(m), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: isSelected ? Colors.white : Colors.blueGrey.shade900)),
+                    Text(
+                      DateFormat('MMM').format(m).toUpperCase(),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: isSelected ? Colors.white : Colors.black87
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      DateFormat('yy').format(m),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          color: isSelected ? Colors.white70 : Colors.grey
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -350,409 +364,348 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('schemes').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
-      builder: (context, sSnap) {
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('payments').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
-          builder: (context, pSnap) {
-            final schemesMap = {for (var doc in (sSnap.data?.docs ?? [])) doc.id: doc.data() as Map<String, dynamic>};
-            final allPayments = pSnap.data?.docs ?? [];
+      stream: FirebaseFirestore.instance
+          .collection('payments')
+          .where('kuriId', isEqualTo: widget.kuriId)
+          .snapshots(),
+      builder: (context, pSnap) {
+        if (!pSnap.hasData) return const Expanded(child: Center(child: CircularProgressIndicator()));
 
-            Map<String, Map<String, dynamic>> currentMonthPaidMap = {
-              for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
-                doc['memberId'].toString(): doc.data() as Map<String, dynamic>
-            };
+        final allPayments = pSnap.data!.docs;
 
-            List<DocumentSnapshot> filteredMembers = _allMembers.where((mDoc) {
-              final d = mDoc.data() as Map<String, dynamic>;
-              if (searchQuery.isNotEmpty) {
-                String name = d['name'].toString().toLowerCase();
-                String kuri = d['kuriNumber'].toString();
-                String target = searchQuery.toLowerCase();
-                if (!name.contains(target) && kuri != target) return false;
-              }
-              final isPaid = currentMonthPaidMap.containsKey(mDoc.id);
-              if (selectedStatus == "Paid" && !isPaid) return false;
-              if (selectedStatus == "Pending" && isPaid) return false;
-              return true;
-            }).toList();
+        Map<String, Map<String, dynamic>> currentMonthPaidMap = {
+          for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
+            doc['memberId'].toString(): doc.data() as Map<String, dynamic>
+        };
 
-            double grandTotalPaid = 0;
-            double grandTotalBalance = 0;
+        List<DocumentSnapshot> filteredList = _allMembers.where((mDoc) {
+          final isPaid = currentMonthPaidMap.containsKey(mDoc.id);
+          if (selectedStatus == "Paid" && !isPaid) return false;
+          if (selectedStatus == "Pending" && isPaid) return false;
+          return true;
+        }).toList();
 
-            List<DataRow> rows = filteredMembers.map((m) {
-              final mid = m.id;
-              final d = m.data() as Map<String, dynamic>;
-              final schemeId = d['schemeId']?.toString() ?? '';
-              final scheme = schemesMap[schemeId] ?? {};
-              final String remark = (d['remark'] ?? "").toString();
-
-              final isPaid = currentMonthPaidMap.containsKey(mid);
-              final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
-
-              List<dynamic> splits = isPaid ? (pMonth!['paymentSplits'] as List? ?? []) : [];
-
-              final Map<String, dynamic> schemeWinners = scheme['winners'] != null
-                  ? Map<String, dynamic>.from(scheme['winners'] as Map)
-                  : {};
-              String? wonMonthKey;
-              schemeWinners.forEach((key, value) { if (value.toString() == mid) wonMonthKey = key.toString(); });
-              bool isCurrentMonthWinner = wonMonthKey == monthKey;
-              bool hasWonInPast = false;
-              String winnerSubtitle = "";
-              if (wonMonthKey != null) {
-                try {
-                  DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
-                  if (!isCurrentMonthWinner && winDate.isBefore(selectedMonth)) hasWonInPast = true;
-                  DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : winDate;
-                  int monthOrdinal = (((winDate.year - start.year) * 12) + winDate.month - start.month) + 1;
-                  winnerSubtitle = "$monthOrdinal Month Winner - ${DateFormat('MMM yyyy').format(winDate)}";
-                } catch (e) { winnerSubtitle = "Winner"; }
-              }
-
-              double monthlyAmount = _parseNum(scheme['monthlyAmount']);
-              final int totalInstCountFromDb = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
-              int expectedInst = totalInstCountFromDb;
-              if (wonMonthKey != null) {
-                DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
-                List<String> keys = List.generate(totalInstCountFromDb, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
-                int winIdx = keys.indexOf(wonMonthKey!);
-                expectedInst = (winIdx != -1) ? (winIdx + 1) : totalInstCountFromDb;
-              }
-
-              final mPayments = allPayments.where((p) => p['memberId'] == mid);
-              double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
-              double balance = (monthlyAmount * expectedInst) - totalPaid;
-              if (balance < 0) balance = 0;
-              grandTotalPaid += totalPaid;
-              grandTotalBalance += balance;
-
-              // --- UPDATED STATUS LOGIC START ---
-              Color statusBgColor = const Color(0xFFFEE2E2); // Default Red/Pending
-              String statusLabel = "PENDING";
-
-              if (hasWonInPast) {
-                statusBgColor = const Color(0xFFEFF6FF);
-                statusLabel = "WON";
-              }
-              else if (isCurrentMonthWinner) {
-                statusBgColor = Colors.amber.shade100;
-                statusLabel = "WINNER";
-              }
-              else if (isPaid && pMonth != null) {
-                DateTime pDate = (pMonth!['paidDate'] as Timestamp).toDate();
-
-                // Define Dates
-                int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '10') ?? 10;
-                int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1; // e.g., 8th
-
-                DateTime firstDayOfMonth = DateTime(selectedMonth.year, selectedMonth.month, 1);
-                DateTime deadlineDate = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
-                DateTime drawDate = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
-
-                // 1. Advance (Paid before the month started)
-                if (pDate.isBefore(firstDayOfMonth)) {
-                  statusBgColor = const Color(0xFFBAE6FD);
-                  statusLabel = "ADVANCE";
-                }
-                // 2. On-Time (Paid on or before Draw Date - 2)
-                else if (pDate.isBefore(deadlineDate.add(const Duration(seconds: 1)))) {
-                  statusBgColor = const Color(0xFF54EA89);
-                  statusLabel = "ON-TIME";
-                }
-                // 3. Late No Chance (Paid after Draw Date)
-                else if (pDate.isAfter(drawDate)) {
-                  statusBgColor = Colors.grey.shade300;
-                  statusLabel = "LATE\nNO CHANCE";
-                }
-                // 4. Late With Chance (Paid between Deadline and Draw Date)
-                else {
-                  statusBgColor = const Color(0xFFFB923C);
-                  statusLabel = "LATE\nWITH CHANCE";
-                }
-              }
-              // --- UPDATED STATUS LOGIC END ---
-
-              return DataRow(
-                color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
-                cells: [
-                  DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold))),
-                  DataCell(SizedBox(width: 240, child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(children: [
-                        if (wonMonthKey != null) Icon(Icons.stars, color: isCurrentMonthWinner ? Colors.orange : Colors.blue, size: 14),
-                        const SizedBox(width: 4),
-                        Expanded(child: Text(d['name'].toString().toUpperCase(),
-                            style: TextStyle(fontSize: 13, color: hasWonInPast ? Colors.blue.shade900 : Colors.black, fontWeight: FontWeight.bold))),
-                      ]),
-                      if (remark.isNotEmpty)
-                        Text("NOTE: $remark", style: const TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.bold)),
-                      if (wonMonthKey != null)
-                        Text(winnerSubtitle, style: const TextStyle(fontSize: 10, color: Colors.blue, fontWeight: FontWeight.w600)),
-                    ],
-                  ))),
-                  DataCell(Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 13))),
-                  DataCell(Text(scheme['schemeName']?.toString().toUpperCase() ?? "N/A", style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 13))),
-                  DataCell(Text("${mPayments.length}/$expectedInst", style: const TextStyle(fontSize: 13))),
-                  DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(fontSize: 13, color: Colors.green, fontWeight: FontWeight.bold))),
-                  DataCell(Text(currencyFormat.format(balance), style: const TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold))),
-                  DataCell(Container(
-                    width: double.infinity, height: double.infinity, alignment: Alignment.center,
-                    color: statusBgColor,
-                    child: (isPaid || hasWonInPast || isCurrentMonthWinner)
-                        ? Text(statusLabel.toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))
-                        : _buildPayButton(mid, d['name'], monthlyAmount, schemeId),
-                  )),
-                  DataCell(Text(isPaid && pMonth?['paidDate'] != null ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-", style: const TextStyle(fontSize: 12))),
-
-                  DataCell(isPaid
-                      ? Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: splits.isNotEmpty
-                        ? splits.map((s) => Text("${currencyFormat.format(_parseNum(s['amount']))} (${s['mode']})", style: const TextStyle(fontSize: 11))).toList()
-                        : [Text(pMonth?['mode'] ?? "Cash", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))],
-                  )
-                      : const Text("-", style: TextStyle(fontSize: 12))),
-
-                  DataCell(isPaid
-                      ? Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: splits.isNotEmpty
-                        ? splits.map((s) => Text(s['collectorName']?.toString() ?? "-", style: const TextStyle(fontSize: 11))).toList()
-                        : [Text(pMonth?['collectedBy'] ?? "-", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))],
-                  )
-                      : const Text("-", style: TextStyle(fontSize: 12))),
-
-                  DataCell(isPaid
-                      ? Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text((pMonth?['addedByName'] ?? "-").toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                      if (pMonth?['paidAt'] != null)
-                        Text(DateFormat('dd-MMM hh:mm a').format((pMonth!['paidAt'] as Timestamp).toDate()),
-                            style: const TextStyle(fontSize: 10, color: Colors.black87, fontWeight: FontWeight.w500)),
-                    ],
-                  )
-                      : const Text("-", style: TextStyle(fontSize: 12))),
-                ],
-              );
-            }).toList();
-
-            return Expanded(child: Column(children: [
-              Expanded(child: Scrollbar(
+        return Expanded(
+          child: Column(
+            children: [
+              Expanded(
+                child: Scrollbar(
                   controller: _verticalScroll,
+                  thumbVisibility: true,
                   child: SingleChildScrollView(
-                      controller: _verticalScroll,
-                      child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: DataTable(
-                              headingRowHeight: 30,
-                              dataRowMaxHeight: 49, // Increased to fit larger text
-                              columnSpacing: 50,    // Increased for horizontal breathing room
-                              horizontalMargin: 10,
-                              headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
-                              border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
-                              columns: const [
-                                DataColumn(label: Text("K.NO", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("NAME", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("PHONE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("SCHEME", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("MONTHLY", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("INST", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("PAID", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("BAL", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("STATUS", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("DATE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("MODE", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("COLLECTOR", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                                DataColumn(label: Text("ENTRY", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                              ],
-                              rows: rows
-                          )
-                      )
-                  )
-              ))
-            ]));
-          },
+                    controller: _verticalScroll,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: DataTable(
+                        headingRowHeight: 45,
+                        dataRowMaxHeight: 60,
+                        columnSpacing: 40,
+                        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
+                        border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
+                        columns: const [
+                          DataColumn(label: Text("K.NO", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("NAME", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("PLACE", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("MONTHLY", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("INST", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("PAID", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("BAL", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("STATUS", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("DATE", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("MODE & SPLITS", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("COLLECTOR", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("ENTRY", style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text("ACTION", style: TextStyle(fontWeight: FontWeight.bold))),
+                        ],
+                        rows: filteredList.map((m) {
+                          final d = m.data() as Map<String, dynamic>;
+                          final mid = m.id;
+                          final isPaid = currentMonthPaidMap.containsKey(mid);
+                          final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
+
+                          double monthlyAmount = _parseNum(d['monthlyAmount']);
+                          int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
+
+                          // Winner Logic Definitions
+                          String? winnerMonth = d['winnerMonth'];
+                          bool isCurrentMonthWinner = winnerMonth == monthKey;
+                          bool hasWonInPast = winnerMonth != null && !isCurrentMonthWinner;
+
+                          final mPayments = allPayments.where((p) => p['memberId'] == mid);
+                          double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
+                          double balance = (monthlyAmount * totalMonths) - totalPaid;
+
+                          return DataRow(
+                            color: isCurrentMonthWinner ? WidgetStateProperty.all(Colors.amber.shade50) : null,
+                            cells: [
+                              DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontWeight: FontWeight.bold))),
+                              DataCell(Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(d['name'].toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                ],
+                              )),
+                              DataCell(Text(d['place']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
+                              DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 11))),
+                              DataCell(Text("${mPayments.length}/$totalMonths", style: const TextStyle(fontSize: 11))),
+                              DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
+                              DataCell(Text(currencyFormat.format(balance > 0 ? balance : 0), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11))),
+                              DataCell(_buildStatusBadge(isPaid, hasWonInPast, isCurrentMonthWinner, pMonth)),
+                              DataCell(Text(isPaid ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-", style: const TextStyle(fontSize: 11))),
+                              DataCell(
+                                isPaid ? Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(pMonth!['mode']?.toString() ?? "-", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                    if (pMonth['splitAmounts'] != null)
+                                      Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 9, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
+                                  ],
+                                ) : const Text("-"),
+                              ),
+                              DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 10))),
+                              DataCell(isPaid ? Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold)),
+                                  if (pMonth['paidAt'] != null)
+                                    Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 8)),
+                                ],
+                              ) : const Text("-")),
+                              DataCell(Row(
+                                children: [
+                                  // Show Pay button only if not paid and hasn't won before
+                                  if (!isPaid && !hasWonInPast)
+                                    _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
+
+                                  // Winner Button with Conditions
+                                  if (!hasWonInPast)
+                                    IconButton(
+                                      icon: Icon(
+                                        isCurrentMonthWinner ? Icons.stars : Icons.emoji_events_outlined,
+                                        color: isCurrentMonthWinner
+                                            ? Colors.orange
+                                            : (isPaid ? Colors.blue : Colors.grey.shade400),
+                                        size: 20,
+                                      ),
+                                      onPressed: isCurrentMonthWinner
+                                          ? null
+                                          : () => _markAsWinner(mid, d['name'], isPaid, d),
+                                      tooltip: isCurrentMonthWinner
+                                          ? "Winner"
+                                          : (isPaid ? "Mark Winner" : "Payment Required"),
+                                    ),
+                                ],
+                              )),
+                            ],
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (_isLoadingMore)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  width: double.infinity,
+                  color: Colors.white,
+                  child: const Center(child: SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+                ),
+            ],
+          ),
         );
       },
     );
   }
+// Helper to build the status badge using the logic you provided
+  Widget _buildStatusBadge(bool isPaid, bool hasWonInPast, bool isCurrentMonthWinner, Map<String, dynamic>? pMonth) {
+    Color statusColor = const Color(0xFFFEE2E2);
+    String statusLabel = "PENDING";
 
-  // --- UPDATED WINNER ACTION ---
+    if (hasWonInPast) {
+      statusColor = const Color(0xFFEFF6FF);
+      statusLabel = "WON";
+    } else if (isCurrentMonthWinner) {
+      statusColor = Colors.amber.shade100;
+      statusLabel = "WINNER";
+    } else if (isPaid && pMonth != null) {
+      DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+      String paymentMonthKey = pMonth['monthKey']?.toString() ?? "";
+      String currentTableMonthKey = monthKey;
 
-  void _confirmWinner(String memberId, String name, bool isPaid, String schemeId, Map<String, dynamic> schemeData) {
-    // 1. Eligibility Check
-    if (!isPaid) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Member must pay first to be eligible."), backgroundColor: Colors.red)
-      );
-      return;
-    }
+      int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '10') ?? 10;
+      int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
 
-    // 2. Draw Date Check
-    int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? "0") ?? 0;
-    DateTime now = DateTime.now();
-    if (selectedMonth.year == now.year && selectedMonth.month == now.month) {
-      if (now.day < drawDay) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Draw date is Day $drawDay. Cannot mark winner yet."), backgroundColor: Colors.orange)
-        );
-        return;
+      DateTime firstDayOfMonth = DateTime(selectedMonth.year, selectedMonth.month, 1);
+      DateTime deadlineDate = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59, 59);
+      DateTime drawDate = DateTime(selectedMonth.year, selectedMonth.month, drawDay, 23, 59, 59);
+
+      if (paymentMonthKey != currentTableMonthKey || pDate.isBefore(firstDayOfMonth)) {
+        statusColor = const Color(0xFFBAE6FD);
+        statusLabel = "ADVANCE";
+      } else if (pDate.isAfter(drawDate)) {
+        statusColor = Colors.grey.shade300;
+        statusLabel = "LATE\nNO CHANCE";
+      } else if (pDate.isAfter(deadlineDate)) {
+        statusColor = Colors.orange.shade200;
+        statusLabel = "LATE\nWITH CHANCE";
+      } else {
+        statusColor = const Color(0xFF54EA89);
+        statusLabel = "ON-TIME";
       }
     }
 
-    // Check if a winner already exists for this month to show a "Replace" warning
-    final schemeWinners = schemeData['winners'] as Map<String, dynamic>? ?? {};
-    bool exists = schemeWinners.containsKey(monthKey);
-    String existingWinnerId = schemeWinners[monthKey] ?? "";
+    return Container(
+      width: 90, height: 35, alignment: Alignment.center,
+      decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(4)),
+      child: Text(statusLabel.toUpperCase(),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.black87)),
+    );
+  }
+  // --- UPDATED WINNER ACTION ---
 
-    // Prevent selecting the same person twice
-    if (exists && existingWinnerId == memberId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("This member is already the winner for this month."))
-      );
+  void _markAsWinner(String mid, String name, bool isPaid, Map<String, dynamic> memberData) async {
+    // --- EXISTING CHECKS (Date, Payment, Late) ---
+    final int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '0') ?? 0;
+    final int todayDay = DateTime.now().day;
+    final DateTime now = DateTime.now();
+
+    bool isDrawDateReached = (now.year > selectedMonth.year) ||
+        (now.year == selectedMonth.year && now.month > selectedMonth.month) ||
+        (now.year == selectedMonth.year && now.month == selectedMonth.month && todayDay >= drawDay);
+
+    if (!isDrawDateReached) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Draw date ($drawDay) not reached yet."), backgroundColor: Colors.orange));
       return;
     }
 
+    if (!isPaid) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Pending members cannot win."), backgroundColor: Colors.red));
+      return;
+    }
+
+    if (memberData['isLate'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Late members disqualified."), backgroundColor: Colors.black));
+      return;
+    }
+
+    // --- NEW: ONE WINNER PER MONTH CHECK ---
+    try {
+      final existingWinnerSnap = await FirebaseFirestore.instance
+          .collection('enrollments')
+          .where('kuriId', isEqualTo: widget.kuriId)
+          .where('winnerMonth', isEqualTo: monthKey)
+          .limit(1)
+          .get();
+
+      if (existingWinnerSnap.docs.isNotEmpty) {
+        String currentWinnerName = existingWinnerSnap.docs.first['name'] ?? "Someone";
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("ERROR: $currentWinnerName is already the winner for this month!"),
+            backgroundColor: Colors.red.shade900,
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      debugPrint("Winner Check Error: $e");
+    }
+
+    // --- PROCEED TO CONFIRMATION ---
     showDialog(
       context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          width: 500,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))],
+      builder: (context) => AlertDialog(
+        title: const Text("Confirm Winner"),
+        content: Text("Are you sure you want to mark $name as the ONLY winner for ${DateFormat('MMMM yyyy').format(selectedMonth)}?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () async {
+              await FirebaseFirestore.instance.collection('enrollments').doc(mid).update({
+                'winnerMonth': monthKey,
+                'winDate': FieldValue.serverTimestamp(),
+              });
+              Navigator.pop(context);
+              _fetchMembers(isInitial: true);
+            },
+            child: const Text("Confirm Winner"),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                height: 140,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: exists ? Colors.red.shade50 : Colors.orange.shade50,
-                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-                ),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(color: exists ? Colors.red.shade100 : Colors.orange.shade100, shape: BoxShape.circle),
-                    child: Icon(exists ? Icons.published_with_changes_rounded : Icons.emoji_events_rounded,
-                        size: 60, color: exists ? Colors.red.shade800 : Colors.orange.shade800),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
-                child: Column(
-                  children: [
-                    Text(exists ? "REPLACE MONTHLY WINNER" : "CONFIRM MONTHLY WINNER",
-                        style: TextStyle(letterSpacing: 1.2, fontSize: 12, fontWeight: FontWeight.bold, color: exists ? Colors.red : Colors.orange)),
-                    const SizedBox(height: 16),
-                    Text(name.toUpperCase(),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFF1A1A1A))),
-                    const SizedBox(height: 8),
-                    Text("Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}",
-                        style: TextStyle(fontSize: 16, color: Colors.grey.shade600)),
-                    if (exists) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12)),
-                        child: const Text(
-                          "Note: A winner is already assigned for this month. Confirming will replace them with this member.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600),
-                        ),
-                      )
-                    ]
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24)),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 20)),
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text("CANCEL", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: exists ? Colors.red.shade800 : Colors.orange.shade800,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 20),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () async {
-                          try {
-                            final batch = FirebaseFirestore.instance.batch();
-                            final schemeRef = FirebaseFirestore.instance.collection('schemes').doc(schemeId);
-                            final winnerDocId = "${schemeId}_$monthKey";
-                            final winnerRef = FirebaseFirestore.instance.collection('winners').doc(winnerDocId);
-                            final logRef = FirebaseFirestore.instance.collection('winner_logs').doc();
-
-                            Map<String, dynamic> winnerData = {
-                              'schemeId': schemeId,
-                              'schemeName': schemeData['schemeName'] ?? 'Unknown',
-                              'monthKey': monthKey,
-                              'memberId': memberId,
-                              'memberName': name,
-                              'updatedAt': FieldValue.serverTimestamp(),
-                              'updatedBy': widget.userName,
-                              'previousWinnerId': existingWinnerId, // Track the change
-                            };
-
-                            // Overwrites existing month key in the map
-                            batch.update(schemeRef, {'winners.$monthKey': memberId});
-                            // Overwrites the winner document for this scheme/month
-                            batch.set(winnerRef, winnerData);
-                            // Creates a new log entry
-                            batch.set(logRef, { ...winnerData, 'action': exists ? 'REPLACED' : 'ASSIGNED' });
-
-                            await batch.commit();
-
-                            if (context.mounted) Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(exists ? "Winner Replaced!" : "Winner Assigned!"))
-                            );
-                          } catch (e) {
-                            debugPrint("Winner Error: $e");
-                          }
-                        },
-                        child: Text(exists ? "CONFIRM REPLACE" : "CONFIRM WINNER", style: const TextStyle(fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }
 
+  Widget _buildPayButton(String enrollmentId, String name, String masterId, double monthlyAmount) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.green,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+        minimumSize: const Size(50, 28),
+        elevation: 0,
+      ),
+      onPressed: () => _showMarkPaymentDialog(enrollmentId, name, masterId, monthlyAmount),
+      child: const Text("PAY", style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  void _showMarkPaymentDialog(String enrollmentId, String name, String masterId, double monthlyAmount) async {
+    final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
+    Map<String, String> adminIdMap = {for (var doc in adminSnap.docs) doc['name'].toString(): doc.id};
+    List<String> adminNames = adminIdMap.keys.toList();
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (c) => MarkPaymentDialog(
+        memberName: name,
+        fullAmount: monthlyAmount,
+        adminList: adminNames,
+        onConfirm: (splits, totalCollected) async {
+          try {
+            // --- NEW: Create a string of just the amounts for the table ---
+            String splitAmountsStr = splits.map((s) => s['amount'].toString()).join(", ");
+
+            await FirebaseFirestore.instance.collection('payments').add({
+              'kuriId': widget.kuriId,
+              'memberId': enrollmentId,
+              'masterId': masterId,
+              'monthKey': monthKey,
+              'amount': monthlyAmount,
+              'collectedTotal': totalCollected,
+              'splitAmounts': splitAmountsStr, // Saved for quick display in table
+              'mode': splits.map((s) => s['mode'].toString()).join(", "),
+              'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
+              'paymentSplits': splits.map((s) => {
+                'collectorName': s['collector'],
+                'collectorId': adminIdMap[s['collector']] ?? "",
+                'amount': s['amount'],
+                'mode': s['mode'],
+                'date': s['date'],
+              }).toList(),
+              'paidDate': Timestamp.fromDate(splits.last['date']),
+              'paidAt': FieldValue.serverTimestamp(),
+              'addedById': widget.userId,
+              'addedByName': widget.userName,
+            });
+
+            _fetchMembers(isInitial: true);
+            if (mounted) Navigator.pop(c); // Close dialog
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Paid Successfully"), backgroundColor: Colors.green));
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+          }
+        },
+      ),
+    );
+  }
   // --- HELPERS ---
 
   Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
@@ -760,231 +713,35 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     const SizedBox(width: 4), Expanded(child: child)
   ]);
 
-  Widget _vDivider() => Container(margin: const EdgeInsets.symmetric(horizontal: 4), height: 20, width: 1, color: Colors.white24);
 
-  Widget _compactItem(String label, String value, {bool isTitle = false, bool isSpecial = false}) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 10),
-    child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: const TextStyle(color: Colors.white60, fontSize: 7, fontWeight: FontWeight.bold)),
-      Text(value, style: TextStyle(color: isSpecial ? Colors.greenAccent : Colors.white, fontSize: isTitle ? 11 : 10, fontWeight: FontWeight.bold)),
-    ]),
-  );
-
-  Widget _buildPayButton(String id, String name, double amt, String sid) => ElevatedButton(onPressed: () {},
-      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size(40, 35)), child: const Text("PENDING", style: TextStyle(fontSize: 8, color: Colors.white)));
-
-
-
-
-
-  Future<void> _generateMonthlyPDF() async {
-    final pdf = pw.Document();
-    final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: 'Rs.', decimalDigits: 0);
-    final dateStr = DateFormat('MMMM yyyy').format(selectedMonth);
-
-    // 1. Fetch Data
-    final schemesSnap = await FirebaseFirestore.instance.collection('schemes').where('kuriId', isEqualTo: widget.kuriId).get();
-    final schemesMap = {for (var doc in schemesSnap.docs) doc.id: doc.data() as Map<String, dynamic>};
-    final paymentsSnap = await FirebaseFirestore.instance.collection('payments').where('kuriId', isEqualTo: widget.kuriId).get();
-    final allPayments = paymentsSnap.docs;
-
-    Map<String, Map<String, dynamic>> currentMonthPaidMap = {
-      for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
-        doc['memberId'].toString(): doc.data() as Map<String, dynamic>
-    };
-
-    double totalReceivedThisMonth = 0;
-    int paidCount = 0;
-    int pendingCount = 0;
-
-    // 2. Map Member Data to Table Rows
-    final tableData = _allMembers.map((m) {
-      final mid = m.id;
-      final d = m.data() as Map<String, dynamic>;
-      final schemeId = d['schemeId']?.toString() ?? '';
-      final scheme = schemesMap[schemeId] ?? {};
-      final pMonth = currentMonthPaidMap[mid];
-      final isPaid = pMonth != null;
-
-      if (isPaid) {
-        paidCount++;
-        totalReceivedThisMonth += _parseNum(pMonth['amount']);
-      } else {
-        pendingCount++;
-      }
-
-      final Map<String, dynamic> schemeWinners = scheme['winners'] != null
-          ? Map<String, dynamic>.from(scheme['winners'] as Map)
-          : {};
-
-      String? wonMonthKey;
-      schemeWinners.forEach((k, v) { if (v.toString() == mid) wonMonthKey = k.toString(); });
-
-      bool isCurrentMonthWinner = wonMonthKey == monthKey;
-      bool hasWonInPast = false;
-      if (wonMonthKey != null && !isCurrentMonthWinner) {
-        try {
-          DateTime winDate = DateFormat('yyyy_MM').parse(wonMonthKey!);
-          if (winDate.isBefore(selectedMonth)) hasWonInPast = true;
-        } catch (e) { hasWonInPast = true; }
-      }
-
-      double mAmount = _parseNum(scheme['monthlyAmount']);
-      int totalMonths = int.tryParse(scheme['totalMonths']?.toString() ?? '0') ?? 0;
-
-      int expectedInst = totalMonths;
-      String winnerFullLabel = "";
-
-      if (wonMonthKey != null) {
-        DateTime start = (scheme['startMonth'] is Timestamp) ? (scheme['startMonth'] as Timestamp).toDate() : DateTime.now();
-        List<String> keys = List.generate(totalMonths, (i) => DateFormat('yyyy_MM').format(DateTime(start.year, start.month + i)));
-        int winIdx = keys.indexOf(wonMonthKey!);
-        expectedInst = (winIdx != -1) ? (winIdx + 1) : totalMonths;
-
-        // Format Month & Year from wonMonthKey
-        DateTime winDateObj = DateFormat('yyyy_MM').parse(wonMonthKey!);
-        String winMonthYear = DateFormat('MMMM yyyy').format(winDateObj);
-
-        // Suffix Logic (st, nd, rd, th)
-        String suffix = "th";
-        int digit = expectedInst % 10;
-        int lastTwo = expectedInst % 100;
-        if (digit == 1 && lastTwo != 11) suffix = "st";
-        else if (digit == 2 && lastTwo != 12) suffix = "nd";
-        else if (digit == 3 && lastTwo != 13) suffix = "rd";
-
-        winnerFullLabel = "$expectedInst$suffix Month Winner - $winMonthYear";
-      }
-
-      final mPayments = allPayments.where((p) => p['memberId'] == mid);
-      double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum(p['amount']));
-      double balance = (mAmount * expectedInst) - totalPaid;
-
-      // --- STATUS & DETAILS LOGIC ---
-      String status = "PENDING";
-      String details = "-";
-
-      if (wonMonthKey != null) {
-        details = winnerFullLabel;
-        if (hasWonInPast) {
-          status = "WON";
-        } else if (isCurrentMonthWinner) {
-          status = "WINNER";
-        }
-      } else if (isPaid && pMonth['paidDate'] != null) {
-        DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
-        details = "${DateFormat('dd/MM').format(pDate)}\n${pMonth['collectedBy'] ?? ''}\n${pMonth['mode'] ?? ''}";
-
-        int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '') ?? 0;
-        int lastPayDay = drawDay > 2 ? (drawDay - 2) : 1;
-        DateTime boundary = DateTime(selectedMonth.year, selectedMonth.month, lastPayDay, 23, 59);
-
-        if (pDate.isBefore(DateTime(selectedMonth.year, selectedMonth.month, 1))) status = "Advance";
-        else if (drawDay != 0 && pDate.isBefore(boundary)) status = "On-Time";
-        else status = "Late";
-      }
-
-      return [
-        d['kuriNumber']?.toString() ?? "-",
-        d['name'].toString().toUpperCase(),
-        d['phone'] ?? "-",
-        scheme['schemeName']?.toString().toUpperCase() ?? "N/A",
-        currencyFormat.format(mAmount),
-        status.toUpperCase(),
-        details,
-        currencyFormat.format(totalPaid),
-        currencyFormat.format(balance < 0 ? 0 : balance),
-      ];
-    }).toList();
-
-    // 3. Generate PDF Document
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        margin: const pw.EdgeInsets.symmetric(horizontal: 30, vertical: 30),
-        header: (context) => pw.Header(
-          level: 0,
-          child: pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(widget.kuriName.toUpperCase(), style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-                  pw.Text("Monthly Collection Report", style: const pw.TextStyle(fontSize: 10)),
-                ],
-              ),
-              pw.Text("Month: $dateStr", style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-            ],
-          ),
-        ),
-        build: (context) => [
-          pw.TableHelper.fromTextArray(
-            headers: ['K.NO', 'NAME', 'PHONE', 'SCHEME', 'MONTHLY', 'STATUS', 'DETAILS', 'PAID', 'BALANCE'],
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
-            cellStyle: const pw.TextStyle(fontSize: 8),
-            headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-            columnWidths: {
-              0: const pw.FixedColumnWidth(25),
-              1: const pw.FixedColumnWidth(90),
-              2: const pw.FixedColumnWidth(70),
-              3: const pw.FixedColumnWidth(70),
-              4: const pw.FixedColumnWidth(60),
-              5: const pw.FixedColumnWidth(60),
-              6: const pw.FixedColumnWidth(120), // Increased width for the long winner label
-              7: const pw.FixedColumnWidth(60),
-              8: const pw.FixedColumnWidth(60),
-            },
-            data: tableData,
-          ),
-          pw.SizedBox(height: 20),
-          _buildPdfSummary(currencyFormat, totalReceivedThisMonth, paidCount, pendingCount),
-        ],
-      ),
-    );
-
-    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
-  }
-
-// --- PDF HELPER WIDGETS ---
-
-  pw.Widget _buildPdfSummary(NumberFormat currencyFormat, double totalReceived, int paid, int pending) {
-    return pw.Container(
-      padding: const pw.EdgeInsets.all(12),
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: PdfColors.grey400),
-        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
+// Helper methods for the Ribbon UI
+  Widget _compactItem(String label, String value, {bool isTitle = false, bool isSpecial = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
         children: [
-          pw.Text("COLLECTION SUMMARY", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900)),
-          pw.Divider(thickness: 0.5, color: PdfColors.grey400),
-          pw.SizedBox(height: 5),
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              _pdfSummaryItem("Total Members", _allMembers.length.toString()),
-              _pdfSummaryItem("Paid Members", paid.toString()),
-              _pdfSummaryItem("Pending Members", pending.toString()),
-              _pdfSummaryItem("Collection (Month)", currencyFormat.format(totalReceived)),
-            ],
-          ),
+          Text("$label: ", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w400)),
+          Text(value, style: TextStyle(
+              color: isSpecial ? Colors.yellowAccent : Colors.white,
+              fontSize: isTitle ? 14 : 14,
+              fontWeight: FontWeight.bold
+          )),
         ],
       ),
     );
   }
 
-  pw.Widget _pdfSummaryItem(String label, String value) {
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(label, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
-        pw.SizedBox(height: 2),
-        pw.Text(value, style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
-      ],
-    );
+  Widget _vDivider() {
+    return VerticalDivider(color: Colors.white24, indent: 8, endIndent: 8, width: 20);
   }
+
+
+
+
+
+
+
+
 
 
 }

@@ -182,11 +182,13 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
           _buildMemberTable(),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: SchemeTheme.primaryBlue,
-        onPressed: () => _showAddMember(),
-        child: const Icon(Icons.person_add, color: Colors.white),
-      ),
+
+
+      // floatingActionButton: FloatingActionButton(
+      //   backgroundColor: SchemeTheme.primaryBlue,
+      //   onPressed: () => _showAddMember(),
+      //   child: const Icon(Icons.person_add, color: Colors.white),
+      // ),
     );
   }
 
@@ -943,21 +945,21 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
 
 
 
-  Future<void> _showAddMember() async {
-    final bool? saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => SelectFromMasterDialog(
-        schemeId: widget.schemeId,
-        schemeName: (widget.schemeData['schemeName'] ?? "Scheme").toString(),
-        userId: widget.userId,
-        userName: widget.userName,
-        // Ensure these use fallbacks to empty strings to avoid Null crashes
-        kuriId: widget.kuriId,
-        kuriName: (widget.kuriData["name"] ?? "").toString(),
-      ),
-    );
-    if (saved == true) _fetchMembers(isInitial: true);
-  }
+  // Future<void> _showAddMember() async {
+  //   final bool? saved = await showDialog<bool>(
+  //     context: context,
+  //     builder: (context) => SelectFromMasterDialog(
+  //       schemeId: widget.schemeId,
+  //       schemeName: (widget.schemeData['schemeName'] ?? "Scheme").toString(),
+  //       userId: widget.userId,
+  //       userName: widget.userName,
+  //       // Ensure these use fallbacks to empty strings to avoid Null crashes
+  //       kuriId: widget.kuriId,
+  //       kuriName: (widget.kuriData["name"] ?? "").toString(),
+  //     ),
+  //   );
+  //   if (saved == true) _fetchMembers(isInitial: true);
+  // }
 }
 
 

@@ -182,19 +182,19 @@ class _KuriDataTable extends StatelessWidget {
     final int lastPaymentDay = kuri.kuriDate - 2;
 
     return DataRow(
-      onSelectChanged: (_) => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (c) => SchemeListScreen(
-            kuriId: kuri.id!,
-            kuriName: kuri.name,
-            kuriData: kuri.toMap(),
-            userId: userId,
-            userName: userName,
-            userRole: userRole,
-          ),
-        ),
-      ),
+      // onSelectChanged: (_) => Navigator.push(
+      //   context,
+      //   MaterialPageRoute(
+      //     builder: (c) => SchemeListScreen(
+      //       kuriId: kuri.id!,
+      //       kuriName: kuri.name,
+      //       kuriData: kuri.toMap(),
+      //       userId: userId,
+      //       userName: userName,
+      //       userRole: userRole,
+      //     ),
+      //   ),
+      // ),
       cells: [
         DataCell(Text("$serialNo", style: const TextStyle(color: KuriTheme.textMuted, fontWeight: FontWeight.bold))),
         DataCell(Text(kuri.name, style: const TextStyle(fontWeight: FontWeight.bold, color: KuriTheme.textDark, fontSize: 14))),
