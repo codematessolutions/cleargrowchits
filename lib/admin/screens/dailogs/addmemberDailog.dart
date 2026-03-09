@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 class SchemeTheme {
   static const primaryBlue = Color(0xFF1E3A8A);
@@ -145,6 +148,74 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
     }
   }
 
+  Future<void> _createAndEnroll400Members() async {
+    setState(() => _isSaving = true);
+
+    final db = FirebaseFirestore.instance;
+    final batch = db.batch();
+
+    try {
+      // 1. Get the current count to ensure Kuri Numbers continue correctly
+      AggregateQuerySnapshot countSnapshot = await db
+          .collection('enrollments')
+          .where('kuriId', isEqualTo: widget.kuriId)
+          .count()
+          .get();
+
+      int currentTotal = countSnapshot.count ?? 0;
+
+      // 2. Loop exactly 400 times to create manual data
+      for (int i = 1; i <= 400; i++) {
+        currentTotal++; // Sequential Kuri Number (e.g., 001, 002...)
+
+        // Generate manual dummy data
+        final String dummyName = "TEST MEMBER $currentTotal";
+        final String dummyPhone = "90000${currentTotal.toString().padLeft(5, '0')}";
+        final String dummyPlace = "Test City";
+
+        // Unique ID for the enrollment
+        final String uniqueId = "${widget.kuriId}_TEST_$currentTotal";
+
+        final docRef = db.collection('enrollments').doc(uniqueId);
+
+        batch.set(docRef, {
+          'kuriId': widget.kuriId,
+          'kuriName': widget.kuriName,
+          'masterId': "TEST_MASTER_$currentTotal", // Manual master ID
+          'name': dummyName,
+          'phone': dummyPhone,
+          'place': dummyPlace,
+          'kuriNumber': currentTotal.toString().padLeft(3, '0'),
+          'remark': "Bulk Test Member",
+          'monthlyAmount': double.tryParse(_amountController.text) ?? 5000.0,
+          'totalMonths': calculatedInstallments,
+          'joiningMonth': DateFormat('yyyy_MM').format(selectedJoiningMonth),
+          'kuriEndDate': Timestamp.fromDate(kuriEndDate),
+          'enrolledAt': FieldValue.serverTimestamp(),
+          'addedBy': widget.userId,
+          'addedByName': widget.userName,
+          'isTestMember': true, // CRITICAL: Tag for bulk deletion later
+        });
+      }
+
+      // 3. Commit the batch
+      // Since 400 < 500 (Firestore limit), one batch is perfect.
+      await batch.commit();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Successfully created 400 test members!"))
+        );
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      debugPrint("Manual Bulk Save Error: $e");
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -259,6 +330,7 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
         ElevatedButton(
+          // onPressed: (_selectedMembers.isEmpty || _isSaving) ? null : _createAndEnroll400Members,
           onPressed: (_selectedMembers.isEmpty || _isSaving) ? null : _saveMembers,
           style: ElevatedButton.styleFrom(backgroundColor: SchemeTheme.primaryBlue),
           child: _isSaving
@@ -654,6 +726,9 @@ Widget buildFunnyLoader() {
       );
     },
   );
+
+
+
 }
 
 
