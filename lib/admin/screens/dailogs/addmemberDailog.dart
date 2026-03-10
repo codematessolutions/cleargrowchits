@@ -362,6 +362,8 @@ class MarkPaymentDialog extends StatefulWidget {
 
 class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   // Logic remains exactly as you provided
+  bool _isSaving = false; // NEW: Track saving state to prevent double pops
+
   List<Map<String, dynamic>> splits = [
     {
       "mode": null,
@@ -377,7 +379,8 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   Widget build(BuildContext context) {
     bool isTotalMatched = totalEntered.toInt() == widget.fullAmount.toInt();
     bool areFieldsFilled = !splits.any((s) => s['collector'] == null || s['mode'] == null || s['amount'] <= 0);
-    bool isComplete = isTotalMatched && areFieldsFilled;
+    // Modified to include _isSaving check
+    bool isComplete = isTotalMatched && areFieldsFilled && !_isSaving;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -481,7 +484,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                   side: BorderSide(color: Colors.blue.shade200),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: () => setState(() => splits.add({
+                onPressed: _isSaving ? null : () => setState(() => splits.add({
                   "mode": null, "amount": 0.0, "collector": null, "date": DateTime.now()
                 })),
                 icon: const Icon(Icons.add_circle_outline, size: 20),
@@ -508,7 +511,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       TextButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: _isSaving ? null : () => Navigator.pop(context),
                         child: const Text("CANCEL", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold, fontSize: 14)),
                       ),
                       const SizedBox(width: 20),
@@ -521,10 +524,14 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                           elevation: 0,
                         ),
                         onPressed: isComplete ? () async {
+                          setState(() => _isSaving = true); // Set saving to true
+                          // Calling the logic provided in _showMarkPaymentDialog
                           await widget.onConfirm(splits, splits.first['date']);
-                          if (context.mounted) Navigator.of(context).pop();
+                          // Logic for popping is now handled inside _showMarkPaymentDialog callback
                         } : null,
-                        child: const Text("CONFIRM PAYMENT", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+                        child: _isSaving
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            : const Text("CONFIRM PAYMENT", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8)),
                       ),
                     ],
                   ),
@@ -558,7 +565,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
             width: 130,
             child: InkWell(
               borderRadius: BorderRadius.circular(12),
-              onTap: () async {
+              onTap: _isSaving ? null : () async {
                 DateTime? p = await showDatePicker(
                   context: context,
                   initialDate: splits[index]['date'],
@@ -594,6 +601,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           SizedBox(
             width: 110,
             child: _inputWrapper(TextFormField(
+              enabled: !_isSaving,
               keyboardType: TextInputType.number,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               decoration: const InputDecoration(
@@ -618,7 +626,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                 value: e,
                 child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               )).toList(),
-              onChanged: (v) => setState(() => splits[index]['mode'] = v),
+              onChanged: _isSaving ? null : (v) => setState(() => splits[index]['mode'] = v),
               validator: (v) => v == null ? "Required" : null,
             )),
           ),
@@ -635,14 +643,14 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
                 value: e,
                 child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               )).toList(),
-              onChanged: (v) => setState(() => splits[index]['collector'] = v),
+              onChanged: _isSaving ? null : (v) => setState(() => splits[index]['collector'] = v),
             )),
           ),
 
           // DELETE
           SizedBox(
             width: 48,
-            child: splits.length > 1
+            child: (splits.length > 1 && !_isSaving)
                 ? IconButton(
               onPressed: () => setState(() => splits.removeAt(index)),
               icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent, size: 24),

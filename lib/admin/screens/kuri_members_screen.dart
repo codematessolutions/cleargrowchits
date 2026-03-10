@@ -249,6 +249,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                         _compactItem("START", startStr),
                         _vDivider(),
                         _compactItem("END", endStr),
+                        _vDivider(),
                         ElevatedButton.icon(
                           onPressed: _isLoading ? null : () async {
                             await _generateFullKuriPDF();
@@ -256,11 +257,11 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                           icon: _isLoading
                               ? const SizedBox(width: 10, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                               : const Icon(Icons.download_rounded, size: 18),
-                          label: const Text("GENERATE & DOWNLOAD PDF"),
+                          label: const Text("PDF"),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red.shade800,
+                            backgroundColor: Colors.blueAccent,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            // padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                             elevation: 2,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
@@ -551,8 +552,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                           children: [
                             DataTable(
                               headingRowHeight: 45,
-                              dataRowMaxHeight: 70,
-                              columnSpacing: 35,
+                              dataRowMaxHeight: 50,
+                              columnSpacing: 45,
                               headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
                               border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
                               columns: const [
@@ -626,23 +627,23 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(pMonth!['mode']?.toString() ?? "-", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.purple)),
+                                        Text(pMonth!['mode']?.toString() ?? "-", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.purple)),
                                         if (pMonth['splitAmounts'] != null && pMonth['splitAmounts'].toString().isNotEmpty)
-                                          Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 9, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
+                                          Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
                                       ],
                                     ) : const Text("-")),
 
                                     // COLLECTOR CELL
-                                    DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 10, color: Colors.teal))),
+                                    DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 14, color: Colors.teal))),
 
                                     // ENTRY BY CELL
                                     DataCell(isPaid ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.brown)),
+                                        Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize:11, fontWeight: FontWeight.bold, color: Colors.brown)),
                                         if (pMonth['paidAt'] != null)
-                                          Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 8, color: Colors.grey)),
+                                          Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 10, color: Colors.grey)),
                                       ],
                                     ) : const Text("-")),
 
@@ -687,8 +688,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
 // --- FIXED 5-STATUS BADGE LOGIC ---
   Widget _buildStatusBadge(bool isPaid, Map<String, dynamic>? pMonth, String? winnerMonth) {
-    Color bgColor = Colors.grey.shade200;
-    Color textColor = Colors.grey.shade700;
+    Color bgColor = Color(0xFFF10505);
+    Color textColor = Color(0xFFFFFFFF);
     String label = "Pending";
 
     if (winnerMonth != null) {
@@ -719,8 +720,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
       if (pDay.isBefore(deadLineDay) || pDay.isAtSameMomentAs(deadLineDay)) {
         label = "ON-TIME";
-        bgColor = Colors.green.shade100;
-        textColor = Colors.green.shade900;
+        bgColor =Color(0xFF4BFF57);
+        textColor = Color(0xFFFFFFFF);
       }
       else if (pDay.isAfter(deadLineDay) && (pDay.isBefore(dDay) || pDay.isAtSameMomentAs(dDay))) {
         label = "LATE (CHANCE)";
@@ -730,7 +731,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       else {
         label = "LATE (NO CHANCE)";
         bgColor = Colors.red.shade100;
-        textColor = Colors.red.shade900;
+        textColor =  Color(0xFFC27575);
       }
     }
 
@@ -778,125 +779,120 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     if (!isPaid || pMonth == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Validation Error: Only members with a 'Paid' status for this month can be marked as winners."),
-          backgroundColor: Colors.red,
+        const SnackBar(content: Text("Validation Error: Member must be 'Paid' to be a winner."), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    // --- ELIGIBILITY LOGIC (Matching your Badge Logic) ---
+    DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+    List<String> parts = monthKey.split('_');
+    int targetYear = int.parse(parts[0]);
+    int targetMonth = int.parse(parts[1]);
+
+    bool isAdvance = pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth);
+    int drawDaySetting = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '8') ?? 8;
+    DateTime drawDate = DateTime(targetYear, targetMonth, drawDaySetting);
+
+    DateTime pDay = DateTime(pDate.year, pDate.month, pDate.day);
+    DateTime dDay = DateTime(drawDate.year, drawDate.month, drawDate.day);
+
+    // BLOCK: LATE (NO CHANCE)
+    if (!isAdvance && pDay.isAfter(dDay)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("ENTRY DENIED: This member paid AFTER the draw date (No Chance)."), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    // 2. ONE WINNER PER MONTH CHECK (Crucial Update)
+    // Check if someone else already won this month
+    final existingWinnerQuery = await FirebaseFirestore.instance
+        .collection('enrollments')
+        .where('kuriId', isEqualTo: widget.kuriId)
+        .where('winnerMonth', isEqualTo: monthKey)
+        .get();
+
+    if (existingWinnerQuery.docs.isNotEmpty) {
+      String currentWinner = existingWinnerQuery.docs.first['name'] ?? "Someone else";
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("DUPLICATE WINNER: $currentWinner is already the winner for $monthKey."),
+          backgroundColor: Colors.black,
         ),
       );
       return;
     }
 
-    // 2. Draw Date Enforcement
-    // Fetches the set draw date (e.g., 10th) from the Kuri settings
-    int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '10') ?? 10;
+    // 3. Draw Date Enforcement
     DateTime now = DateTime.now();
-
-    // Logic: Is today's date >= Draw Date for the selected month/year?
-    bool isDrawDateReached = (now.year > selectedMonth.year) ||
-        (now.year == selectedMonth.year && now.month > selectedMonth.month) ||
-        (now.year == selectedMonth.year && now.month == selectedMonth.month && now.day >= drawDay);
+    bool isDrawDateReached = (now.year > targetYear) ||
+        (now.year == targetYear && now.month > targetMonth) ||
+        (now.year == targetYear && now.month == targetMonth && now.day >= drawDaySetting);
 
     if (!isDrawDateReached) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Draw Lock: Winners for ${monthKey} cannot be assigned until the $drawDay-th."),
-          backgroundColor: Colors.orange.shade900,
-        ),
+        SnackBar(content: Text("Draw Lock: Winners for $monthKey cannot be assigned until the $drawDaySetting-th."), backgroundColor: Colors.orange.shade900),
       );
       return;
     }
 
-    // 3. Confirmation Dialog
+    // 4. Confirmation Dialog
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text("Confirm Kuri Winner"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Are you sure you want to mark $name as the winner?"),
-            const SizedBox(height: 10),
-            const Text("• This will lock their record for this month.", style: TextStyle(fontSize: 12, color: Colors.grey)),
-            const Text("• A permanent audit log will be created.", style: TextStyle(fontSize: 12, color: Colors.grey)),
-          ],
-        ),
+        content: Text("Are you sure you want to mark $name as the winner for $monthKey?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("CANCEL"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("CANCEL")),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
             onPressed: () async {
-              // Close the confirmation dialog
               Navigator.pop(dialogContext);
-
-              // Show non-dismissible loading
-              _showLoadingDialog("Finalizing Winner & Creating Logs...");
+              _showLoadingDialog("Finalizing Winner...");
 
               final db = FirebaseFirestore.instance;
               final batch = db.batch();
 
-              // --- DATABASE UPDATES ---
-
-              // A. Update Member Enrollment
-              final enrollmentRef = db.collection('enrollments').doc(mid);
-              batch.update(enrollmentRef, {
-                'winnerMonth': monthKey, // Mark as winner for THIS month
+              // A. Update Enrollment
+              batch.update(db.collection('enrollments').doc(mid), {
+                'winnerMonth': monthKey,
                 'winDate': FieldValue.serverTimestamp(),
-                'isCompleted': true, // Removes from pending lists
+                'isCompleted': true,
               });
 
-              // B. Update Kuri Summary Metadata
-              final kuriRef = db.collection('kuris').doc(widget.kuriId);
-              batch.update(kuriRef, {
+              // B. Update Kuri Summary
+              batch.update(db.collection('kuris').doc(widget.kuriId), {
                 'lastWinnerName': name,
                 'lastWinnerMonth': monthKey,
                 'totalWinners': FieldValue.increment(1),
               });
 
-              // C. Create Permanent Audit Log
-              final logRef = db.collection('winner_logs').doc();
-              batch.set(logRef, {
+              // C. Create Log
+              batch.set(db.collection('winner_logs').doc(), {
                 'kuriId': widget.kuriId,
-                'kuriName': widget.kuriName ?? 'Kuri',
                 'memberId': mid,
                 'memberName': name,
                 'winMonthKey': monthKey,
                 'loggedAt': FieldValue.serverTimestamp(),
-                // Administrative Details
                 'processedBy': widget.userName,
                 'adminId': widget.userId,
-                // Financial Snapshot
-                'paymentId': pMonth['paymentId'] ?? 'N/A',
-                'amountAtWin': pMonth['amount'] ?? 0,
               });
 
               try {
                 await batch.commit();
-
-                // --- SAFETY CHECK AFTER DATABASE CALL ---
                 if (!mounted) return;
-                Navigator.of(context).pop(); // Close loading dialog
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Winner successfully assigned and logged."), backgroundColor: Colors.green)
-                );
-
-                // Refresh UI
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winner assigned successfully."), backgroundColor: Colors.green));
                 _fetchMembers(isInitial: true);
-
               } catch (e) {
                 if (!mounted) return;
-                Navigator.of(context).pop(); // Close loading dialog
-
-                debugPrint("Winner Logging Error: $e");
-                ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Failed to update winner: $e"), backgroundColor: Colors.red)
-                );
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
               }
             },
             child: const Text("CONFIRM WINNER", style: TextStyle(color: Colors.white)),
@@ -947,13 +943,15 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
     showDialog(
       context: context,
+      barrierDismissible: false, // Prevents closing dialog by clicking outside during save
       builder: (c) => MarkPaymentDialog(
         memberName: name,
         fullAmount: monthlyAmount,
         adminList: adminNames,
-        onConfirm: (splits, totalCollected) async {
+        onConfirm: (splits, firstSplitDate) async {
           try {
-            // --- NEW: Create a string of just the amounts for the table ---
+            // Calculate total from splits locally for the record
+            double totalCollected = splits.fold(0.0, (sum, s) => sum + (s['amount'] as double));
             String splitAmountsStr = splits.map((s) => s['amount'].toString()).join(", ");
 
             await FirebaseFirestore.instance.collection('payments').add({
@@ -963,7 +961,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               'monthKey': monthKey,
               'amount': monthlyAmount,
               'collectedTotal': totalCollected,
-              'splitAmounts': splitAmountsStr, // Saved for quick display in table
+              'splitAmounts': splitAmountsStr,
               'mode': splits.map((s) => s['mode'].toString()).join(", "),
               'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
               'paymentSplits': splits.map((s) => {
@@ -973,17 +971,28 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 'mode': s['mode'],
                 'date': s['date'],
               }).toList(),
-              'paidDate': Timestamp.fromDate(splits.last['date']),
+              // Using the date from the first split as primary paidDate
+              'paidDate': Timestamp.fromDate(firstSplitDate),
               'paidAt': FieldValue.serverTimestamp(),
               'addedById': widget.userId,
               'addedByName': widget.userName,
             });
 
             _fetchMembers(isInitial: true);
-            if (mounted) Navigator.pop(c); // Close dialog
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Paid Successfully"), backgroundColor: Colors.green));
+
+            // CRITICAL: Close using 'c' (the dialog context)
+            if (mounted) Navigator.pop(c);
+
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Paid Successfully"), backgroundColor: Colors.green)
+            );
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+            // If error occurs, we should allow the user to try again
+            // (The _isSaving logic in the dialog state should be reset if needed,
+            // but usually, errors here are handled by keeping the dialog open)
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
+            );
           }
         },
       ),
@@ -1046,8 +1055,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       for (int i = 0; i < enrollDocs.length; i++) {
         if (progressController.isClosed) break;
         progressController.add(i / enrollDocs.length);
-
-        if (i % 15 == 0) await Future.delayed(const Duration(milliseconds: 1));
+        if (i % 20 == 0) await Future.delayed(const Duration(milliseconds: 1));
 
         final d = enrollDocs[i].data() as Map<String, dynamic>;
         final mid = enrollDocs[i].id;
@@ -1062,7 +1070,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
           orElse: () => null,
         );
 
-        // --- 1. WINNER LOGIC ---
         String? winnerMonth = d['winnerMonth'];
         bool hasWon = winnerMonth != null;
         double balance = hasWon ? 0.0 : (monthlyAmount * totalMonths) - totalPaid;
@@ -1070,7 +1077,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         String status = "Pending";
         String details = "-";
 
-        // --- 2. STATUS LOGIC (Priority Order) ---
         if (hasWon) {
           status = "WINNER ($winnerMonth)";
         }
@@ -1085,7 +1091,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             int targetYear = int.parse(parts[0]);
             int targetMonth = int.parse(parts[1]);
 
-            // RULE: Advance
             if (pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth)) {
               status = "Advance";
             } else {
@@ -1093,27 +1098,19 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               DateTime drawDate = DateTime(targetYear, targetMonth, drawDay);
               DateTime lastOnTime = drawDate.subtract(const Duration(days: 2));
 
-              DateTime pDay = DateTime(pDate.year, pDate.month, pDate.day);
-              DateTime dDay = DateTime(drawDate.year, drawDate.month, drawDate.day);
-              DateTime otDay = DateTime(lastOnTime.year, lastOnTime.month, lastOnTime.day);
-
-              if (pDay.isBefore(otDay) || pDay.isAtSameMomentAs(otDay)) {
-                status = "On-Time";
-              } else if (pDay.isBefore(dDay) || pDay.isAtSameMomentAs(dDay)) {
-                status = "Late (Chance)";
-              } else {
-                status = "Late (No Ch)";
-              }
+              if (pDate.isBefore(lastOnTime.add(const Duration(days: 1)))) status = "On-Time";
+              else if (pDate.isBefore(drawDate.add(const Duration(days: 1)))) status = "Late(Ch)";
+              else status = "Late(No)";
             }
           }
         }
 
-        // COMBINING NAME, PHONE, PLACE
-        String memberInfo = "${d['name'].toString().toUpperCase()}\n${d['phone'] ?? '-'}\n${d['place'] ?? '-'}";
-
+        // SEPARATE DATA FOR COLUMNS
         dataRows.add([
           d['kuriNumber']?.toString() ?? "-",
-          memberInfo, // Combined column
+          d['name'].toString().toUpperCase(),
+          d['phone'] ?? "-",
+          d['place'] ?? "-",
           monthlyAmount.toStringAsFixed(0),
           "${mPayments.length}/${hasWon ? mPayments.length : totalMonths}",
           totalPaid.toStringAsFixed(0),
@@ -1123,37 +1120,51 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         ]);
       }
 
-      progressController.add(1.0);
-      await Future.delayed(const Duration(milliseconds: 100));
-
       pdf.addPage(
         pw.MultiPage(
-          pageFormat: PdfPageFormat.a4.landscape,
-          margin: const pw.EdgeInsets.all(15),
+          pageFormat: PdfPageFormat.a6.landscape,
+          margin: const pw.EdgeInsets.all(5), // Smaller margins = more space
           maxPages: 1000,
           theme: pw.ThemeData.withFont(base: font, bold: font),
-          header: (context) => pw.Header(
+          header: (context) => pw.Container(
+            // margin: const pw.EdgeInsets.only(bottom:1),
             child: pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Text("${widget.kuriName} - FULL REPORT", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                pw.Text("MONTH: $monthKey", style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                pw.Text("${widget.kuriName} - FULL REPORT", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                pw.Text("MONTH: $monthKey", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
               ],
             ),
           ),
           build: (context) => [
             pw.TableHelper.fromTextArray(
-              headers: ['K.NO', 'MEMBER DETAILS', 'MNTLY', 'INST', 'PAID', 'BAL', 'STATUS', 'PAYMENT DETAILS'],
+              headers: ['#', 'NAME', 'PHONE', 'PLACE', 'AMT', 'IN', 'PAID', 'BAL', 'STATUS', 'DETAILS'],
               data: dataRows,
-              headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-              cellStyle: const pw.TextStyle(fontSize: 7),
+              // MINIMAL PADDING AND FONT FOR MAXIMUM ROWS PER PAGE
+              cellPadding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+              headerStyle: pw.TextStyle(fontSize: 6.5, fontWeight: pw.FontWeight.bold),
+              cellStyle: const pw.TextStyle(fontSize: 6),
               headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
               columnWidths: {
-                0: const pw.FixedColumnWidth(25),
-                1: const pw.FixedColumnWidth(25), // Wider for Name+Phone+Place
-                3: const pw.FixedColumnWidth(25),
-                6: const pw.FixedColumnWidth(25),
-                7: const pw.FixedColumnWidth(25),
+                0: const pw.FixedColumnWidth(10),  // #
+                1: const pw.FixedColumnWidth(25),  // NAME
+                2: const pw.FixedColumnWidth(20),  // PHONE
+                3: const pw.FixedColumnWidth(20),  // PLACE
+                4: const pw.FixedColumnWidth(10),  // AMT
+                5: const pw.FixedColumnWidth(10),  // IN
+                6: const pw.FixedColumnWidth(10),  // PAID
+                7: const pw.FixedColumnWidth(10),  // BAL
+                8: const pw.FixedColumnWidth(20),  // STATUS
+                9: const pw.FixedColumnWidth(25),  // DETAILS
+              },
+              cellAlignments: {
+                0: pw.Alignment.center,
+                2: pw.Alignment.center,
+                3: pw.Alignment.centerLeft,
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.center,
+                6: pw.Alignment.centerRight,
+                7: pw.Alignment.centerRight,
               },
             ),
           ],
@@ -1161,7 +1172,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       );
 
       if (Navigator.canPop(context)) Navigator.of(context).pop();
-      await Printing.layoutPdf(name: '${widget.kuriName}_$monthKey.pdf', onLayout: (format) async => pdf.save());
+      await Printing.layoutPdf(name: 'Report_$monthKey.pdf', onLayout: (format) async => pdf.save());
 
     } catch (e) {
       if (Navigator.canPop(context)) Navigator.of(context).pop();
