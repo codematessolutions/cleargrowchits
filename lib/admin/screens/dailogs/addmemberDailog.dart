@@ -52,8 +52,11 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
   void initState() {
     super.initState();
     // Dynamic date parsing from your Kuri configuration
-    kuriStartDate = _parseDate(widget.kuriData['startDate']) ?? DateTime(2025, 3);
-    kuriEndDate = _parseDate(widget.kuriData['endDate']) ?? DateTime(2025, 12);
+
+    kuriStartDate = _parseDate(widget.kuriData['startMonth']) ?? DateTime(2025, 3);
+    kuriEndDate = _parseDate(widget.kuriData['endMonth']) ?? DateTime(2025, 12);
+    // kuriStartDate = _parseDate(widget.kuriData['startDate']) ?? DateTime(2025, 3);
+    // kuriEndDate = _parseDate(widget.kuriData['endDate']) ?? DateTime(2025, 12);
 
     // Initialize joining month to Kuri start month
     selectedJoiningMonth = kuriStartDate;
@@ -100,17 +103,51 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
       setState(() => _isSearching = false);
     }
   }
-
+  void _showMessage(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.redAccent : Colors.green,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(10),
+      ),
+    );
+  }
   Future<void> _saveMembers() async {
-    if (_selectedMembers.isEmpty) return;
-
+    // 1. Mandatory Field Validations
+    String amountStr = _amountController.text.trim();
     String customNumStr = _customNumberController.text.trim();
 
-    // 1. Validation for Custom Mode
+    if (_selectedMembers.isEmpty) {
+      _showMessage("Please select at least one member", isError: true);
+      return;
+    }
+
+
+    if (amountStr.isEmpty) {
+      _showMessage("Amount is mandatory", isError: true);
+      return;
+    }
+
+
+    // Double check amount is valid number
+    double? enteredAmount = double.tryParse(amountStr);
+    if (enteredAmount == null || enteredAmount <= 0) {
+      _showMessage("Please enter a valid amount", isError: true);
+      return;
+    }
+
+    // Check if Start Month is selected (if you initialized it as null)
+    // If selectedJoiningMonth defaults to 'now', it will always have a value,
+    // but it's good practice to verify against kuriStartDate bounds.
+    if (selectedJoiningMonth.isBefore(DateTime(kuriStartDate.year, kuriStartDate.month, 1))) {
+      _showMessage("Please select a valid Start Month", isError: true);
+      return;
+    }
+
     if (_isCustomNumber && customNumStr.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please enter a custom starting Kuri Number"), backgroundColor: Colors.orange)
-      );
+      _showMessage("Please enter a custom starting Kuri Number", isError: true);
       return;
     }
 
@@ -118,9 +155,7 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
     final db = FirebaseFirestore.instance;
 
     try {
-      // 2. FIND THE CURRENT "TOP" NUMBER IN DATABASE
-      // This ensures that even if numbers are non-sequential (1, 5, 100),
-      // the next auto-number will be 101.
+      // 2. Find Current Top Number for Auto-increment
       final topNumberQuery = await db.collection('enrollments')
           .where('kuriId', isEqualTo: widget.kuriId)
           .orderBy('kuriNumber', descending: true)
@@ -132,12 +167,12 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
         currentMaxNumber = int.tryParse(topNumberQuery.docs.first['kuriNumber'].toString()) ?? 0;
       }
 
-      // 3. RANGE CONFLICT CHECK (For Custom Mode)
-      // Verifies that NO number in your proposed custom sequence is already taken
+      // 3. Range Conflict Check for Custom Numbers
       if (_isCustomNumber) {
         int customStartNum = int.tryParse(customNumStr) ?? 0;
         List<String> rangeToCheck = [];
         for (int i = 0; i < _selectedMembers.length; i++) {
+          // We pad here to match the unique format in DB
           rangeToCheck.add((customStartNum + i).toString().padLeft(3, '0'));
         }
 
@@ -148,16 +183,14 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
 
         if (conflictCheck.docs.isNotEmpty) {
           String taken = conflictCheck.docs.map((d) => d['kuriNumber']).join(", ");
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Conflict: Number(s) [$taken] already assigned."), backgroundColor: Colors.red)
-          );
+          _showMessage("Conflict: Number(s) [$taken] already assigned.", isError: true);
           setState(() => _isSaving = false);
           return;
         }
+
       }
 
-      // 4. PREPARE BATCH
+      // 4. Batch Enrollment
       final batch = db.batch();
       int customStartNum = int.tryParse(customNumStr) ?? 0;
 
@@ -165,17 +198,14 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
         final memberDoc = _selectedMembers[i];
         final data = memberDoc.data() as Map<String, dynamic>;
 
-        // Determine the final Kuri Number for this specific member in the loop
+        // Format the number with padding (e.g., 001, 002)
         String finalKuriNumber;
         if (_isCustomNumber) {
-          // If Custom: Start from 100 -> 101, 102...
           finalKuriNumber = (customStartNum + i).toString().padLeft(3, '0');
         } else {
-          // If Auto: Start from Highest (e.g., 100) -> 101, 102...
           finalKuriNumber = (currentMaxNumber + i + 1).toString().padLeft(3, '0');
         }
 
-        // Generate a Unique Document ID to prevent clashing
         final String uniqueId = "${widget.kuriId}_${memberDoc.id}_${DateTime.now().millisecondsSinceEpoch}_$i";
 
         batch.set(db.collection('enrollments').doc(uniqueId), {
@@ -186,28 +216,22 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
           'phone': data['phone'],
           'place': data['place'],
           'kuriNumber': finalKuriNumber,
-          'remark': _remarkController.text.trim(),
-          'monthlyAmount': double.tryParse(_amountController.text) ?? 5000.0,
+          'monthlyAmount': enteredAmount,
           'totalMonths': calculatedInstallments,
           'joiningMonth': DateFormat('yyyy_MM').format(selectedJoiningMonth),
           'kuriEndDate': Timestamp.fromDate(kuriEndDate),
+          'kuriStartDate': Timestamp.fromDate(kuriStartDate),
           'enrolledAt': FieldValue.serverTimestamp(),
           'addedBy': widget.userId,
           'addedByName': widget.userName,
         });
       }
 
-      // 5. COMMIT ALL CHANGES
       await batch.commit();
       if (mounted) Navigator.pop(context, true);
 
     } catch (e) {
-      debugPrint("Save Members Error: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
-        );
-      }
+      _showMessage("Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }

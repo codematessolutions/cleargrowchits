@@ -560,6 +560,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                 DataColumn(label: Text("K.NO")),
                                 DataColumn(label: Text("NAME & PHONE")),
                                 DataColumn(label: Text("PLACE")),
+                                DataColumn(label: Text("START\nMONTH")),
                                 DataColumn(label: Text("MONTHLY")),
                                 DataColumn(label: Text("INST")),
                                 DataColumn(label: Text("PAID")),
@@ -602,6 +603,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                       ],
                                     )),
                                     DataCell(Text(d['place']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
+                                    DataCell(Text(d['joiningMonth']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
+
                                     DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 11))),
                                     DataCell(Text("$displayPaidCount/$displayTotalCount",
                                         style: TextStyle(
@@ -654,6 +657,17 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                           IconButton(
                                             icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
                                             onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
+                                          ),
+                                        ],
+
+                                        if (widget.userRole == 'Super Admin') ...[
+                                          IconButton(
+                                            icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
+                                            onPressed: () => _showEditEnrollmentDialog(m), // m is the DocumentSnapshot
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
+                                            onPressed: () => _confirmDeleteEnrollment(m.id, d), // d is the data map
                                           ),
                                         ],
                                         if (hasWon)
@@ -1210,6 +1224,160 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+
+  // --- AUDIT LOG FOR ENROLLMENTS ---
+  Future<void> _logEnrollmentAction(WriteBatch batch, String action, String enrollId, String memberName, Map<String, dynamic> details) async {
+    final logRef = FirebaseFirestore.instance.collection('enrollment_logs').doc();
+    batch.set(logRef, {
+      'action': action,
+      'enrollmentId': enrollId,
+      'memberName': memberName,
+      'kuriId': widget.kuriId,
+      'performedBy': widget.userId,
+      'performedByName': widget.userName,
+      'timestamp': FieldValue.serverTimestamp(),
+      'details': details,
+    });
+  }
+  void _showMessage(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.redAccent : Colors.green,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(10),
+      ),
+    );
+  }
+// --- EDIT DIALOG ---
+  void _showEditEnrollmentDialog(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final nameCtrl = TextEditingController(text: data['name']);
+    final phoneCtrl = TextEditingController(text: data['phone']);
+
+    // Ensure the kuriNumber is padded for consistency if needed (e.g., 001)
+    final kNoCtrl = TextEditingController(text: data['kuriNumber']?.toString());
+
+    bool _isChecking = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Edit Enrollment"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: "Name")),
+                  TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: "Phone")),
+                  TextField(
+                    controller: kNoCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: "Kuri Number"),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
+                ElevatedButton(
+                  onPressed: _isChecking ? null : () async {
+                    final newKNo = kNoCtrl.text.trim();
+                    final oldKNo = data['kuriNumber']?.toString();
+
+                    setDialogState(() => _isChecking = true);
+
+                    try {
+                      // 1. ONLY check uniqueness if the number has actually changed
+                      if (newKNo != oldKNo) {
+                        final duplicateCheck = await FirebaseFirestore.instance
+                            .collection('enrollments')
+                            .where('kuriId', isEqualTo: widget.kuriId)
+                            .where('kuriNumber', isEqualTo: newKNo)
+                            .get();
+
+                        if (duplicateCheck.docs.isNotEmpty) {
+                          _showMessage("Kuri Number $newKNo is already assigned!", isError: true);
+                          setDialogState(() => _isChecking = false);
+                          return;
+                        }
+                      }
+
+                      // 2. Proceed with Update if unique or unchanged
+                      final db = FirebaseFirestore.instance;
+                      final batch = db.batch();
+                      final updates = {
+                        'name': nameCtrl.text.trim().toUpperCase(),
+                        'phone': phoneCtrl.text.trim(),
+                        'kuriNumber': newKNo,
+                        'lastEditedBy': widget.userName,
+                      };
+
+                      batch.update(db.collection('enrollments').doc(doc.id), updates);
+                      await _logEnrollmentAction(batch, 'UPDATE', doc.id, data['name'], {'old': data, 'new': updates});
+
+                      await batch.commit();
+                      Navigator.pop(context);
+                      _fetchMembers(isInitial: true);
+                      _showMessage("Enrollment updated successfully");
+                    } catch (e) {
+                      _showMessage("Error: $e", isError: true);
+                    } finally {
+                      if (mounted) setDialogState(() => _isChecking = false);
+                    }
+                  },
+                  child: _isChecking
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text("UPDATE"),
+                )
+              ],
+            );
+          }
+      ),
+    );
+  }
+
+// --- DELETE (ARCHIVE) LOGIC ---
+  void _confirmDeleteEnrollment(String id, Map<String, dynamic> data) {
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text("Delete Enrollment?"),
+        content: Text("This will move ${data['name']} to archives and stop payment tracking."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text("CANCEL")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              Navigator.pop(c);
+              final db = FirebaseFirestore.instance;
+              final batch = db.batch();
+
+              try {
+                final archiveRef = db.collection('deleted_enrollments').doc(id);
+                Map<String, dynamic> archiveData = Map.from(data);
+                archiveData['deletedAt'] = FieldValue.serverTimestamp();
+                archiveData['deletedBy'] = widget.userName;
+
+                batch.set(archiveRef, archiveData);
+                batch.delete(db.collection('enrollments').doc(id));
+                await _logEnrollmentAction(batch, 'DELETE', id, data['name'], archiveData);
+
+                await batch.commit();
+                _fetchMembers(isInitial: true); // Refresh list
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enrollment Archived")));
+              } catch (e) {
+                debugPrint("Delete Error: $e");
+              }
+            },
+            child: const Text("DELETE", style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }

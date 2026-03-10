@@ -165,9 +165,9 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
             ),
           ),
           const Spacer(),
-          TextButton.icon(onPressed: () {}, icon: const Icon(Icons.filter_list), label: const Text("Advanced Filter")),
+          // TextButton.icon(onPressed: () {}, icon: const Icon(Icons.filter_list), label: const Text("Advanced Filter")),
           const SizedBox(width: 10),
-          IconButton(onPressed: () => setState(() {}), icon: const Icon(Icons.refresh)),
+          // IconButton(onPressed: () => setState(() {}), icon: const Icon(Icons.refresh)),
         ],
       ),
     );
