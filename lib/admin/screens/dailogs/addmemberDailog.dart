@@ -31,8 +31,12 @@ class SelectFromMasterDialog extends StatefulWidget {
 
 class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _amountController = TextEditingController(text: "5000");
+  final TextEditingController _amountController = TextEditingController();
   final TextEditingController _remarkController = TextEditingController();
+
+  // Inside _SelectFromMasterDialogState
+   bool _isCustomNumber = false;
+  final TextEditingController _customNumberController = TextEditingController();
 
   List<DocumentSnapshot> _searchResults = [];
   final List<DocumentSnapshot> _selectedMembers = [];
@@ -99,35 +103,89 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
 
   Future<void> _saveMembers() async {
     if (_selectedMembers.isEmpty) return;
-    setState(() => _isSaving = true);
 
-    final batch = FirebaseFirestore.instance.batch();
+    String customNumStr = _customNumberController.text.trim();
+
+    // 1. Validation for Custom Mode
+    if (_isCustomNumber && customNumStr.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please enter a custom starting Kuri Number"), backgroundColor: Colors.orange)
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    final db = FirebaseFirestore.instance;
 
     try {
-      // 1. Get current count to generate sequential Kuri Numbers
-      QuerySnapshot existingEnrollments = await FirebaseFirestore.instance
-          .collection('enrollments')
+      // 2. FIND THE CURRENT "TOP" NUMBER IN DATABASE
+      // This ensures that even if numbers are non-sequential (1, 5, 100),
+      // the next auto-number will be 101.
+      final topNumberQuery = await db.collection('enrollments')
           .where('kuriId', isEqualTo: widget.kuriId)
+          .orderBy('kuriNumber', descending: true)
+          .limit(1)
           .get();
 
-      int currentTotal = existingEnrollments.docs.length;
+      int currentMaxNumber = 0;
+      if (topNumberQuery.docs.isNotEmpty) {
+        currentMaxNumber = int.tryParse(topNumberQuery.docs.first['kuriNumber'].toString()) ?? 0;
+      }
 
-      for (var memberDoc in _selectedMembers) {
-        currentTotal++; // Increment for each new enrollment
+      // 3. RANGE CONFLICT CHECK (For Custom Mode)
+      // Verifies that NO number in your proposed custom sequence is already taken
+      if (_isCustomNumber) {
+        int customStartNum = int.tryParse(customNumStr) ?? 0;
+        List<String> rangeToCheck = [];
+        for (int i = 0; i < _selectedMembers.length; i++) {
+          rangeToCheck.add((customStartNum + i).toString().padLeft(3, '0'));
+        }
 
+        final conflictCheck = await db.collection('enrollments')
+            .where('kuriId', isEqualTo: widget.kuriId)
+            .where('kuriNumber', whereIn: rangeToCheck)
+            .get();
+
+        if (conflictCheck.docs.isNotEmpty) {
+          String taken = conflictCheck.docs.map((d) => d['kuriNumber']).join(", ");
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Conflict: Number(s) [$taken] already assigned."), backgroundColor: Colors.red)
+          );
+          setState(() => _isSaving = false);
+          return;
+        }
+      }
+
+      // 4. PREPARE BATCH
+      final batch = db.batch();
+      int customStartNum = int.tryParse(customNumStr) ?? 0;
+
+      for (int i = 0; i < _selectedMembers.length; i++) {
+        final memberDoc = _selectedMembers[i];
         final data = memberDoc.data() as Map<String, dynamic>;
 
-        // We use a timestamp-based ID to allow the same member to join twice
-        final String uniqueId = "${widget.kuriId}_${memberDoc.id}_${DateTime.now().millisecondsSinceEpoch}";
+        // Determine the final Kuri Number for this specific member in the loop
+        String finalKuriNumber;
+        if (_isCustomNumber) {
+          // If Custom: Start from 100 -> 101, 102...
+          finalKuriNumber = (customStartNum + i).toString().padLeft(3, '0');
+        } else {
+          // If Auto: Start from Highest (e.g., 100) -> 101, 102...
+          finalKuriNumber = (currentMaxNumber + i + 1).toString().padLeft(3, '0');
+        }
 
-        batch.set(FirebaseFirestore.instance.collection('enrollments').doc(uniqueId), {
+        // Generate a Unique Document ID to prevent clashing
+        final String uniqueId = "${widget.kuriId}_${memberDoc.id}_${DateTime.now().millisecondsSinceEpoch}_$i";
+
+        batch.set(db.collection('enrollments').doc(uniqueId), {
           'kuriId': widget.kuriId,
           'kuriName': widget.kuriName,
           'masterId': memberDoc.id,
           'name': data['name'],
           'phone': data['phone'],
           'place': data['place'],
-          'kuriNumber': currentTotal.toString().padLeft(3, '0'), // Automatically 001, 002...
+          'kuriNumber': finalKuriNumber,
           'remark': _remarkController.text.trim(),
           'monthlyAmount': double.tryParse(_amountController.text) ?? 5000.0,
           'totalMonths': calculatedInstallments,
@@ -139,12 +197,19 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
         });
       }
 
+      // 5. COMMIT ALL CHANGES
       await batch.commit();
       if (mounted) Navigator.pop(context, true);
+
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      debugPrint("Save Members Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
+        );
+      }
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -218,6 +283,16 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Get the maximum allowed amount from your Kuri Data
+    // Assuming it is stored as 'monthlyAmount' or similar in kuriData
+    double maxAllowedAmount = double.tryParse(widget.kuriData['monthlyAmount']?.toString() ?? '0') ?? 0.0;
+
+    // Parse the current input
+    double enteredAmount = double.tryParse(_amountController.text) ?? 0.0;
+
+    // Validation flag
+    bool isAmountInvalid = enteredAmount > maxAllowedAmount;
+
     return AlertDialog(
       title: const Text("Enroll Members",
           style: TextStyle(fontWeight: FontWeight.bold, color: SchemeTheme.primaryBlue)),
@@ -226,20 +301,25 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Amount and Month selection
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _amountController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
+                    onChanged: (val) => setState(() {}), // Trigger rebuild to show/hide error
+                    decoration: InputDecoration(
                         labelText: "Amount",
                         prefixText: "₹",
-                        border: OutlineInputBorder()
+                        // SHOW ERROR MESSAGE HERE
+                        errorText: isAmountInvalid
+                            ? "Max allowed: ₹$maxAllowedAmount"
+                            : null,
+                        border: const OutlineInputBorder()
                     ),
                   ),
                 ),
+
                 const SizedBox(width: 10),
                 Expanded(
                   child: InkWell(
@@ -263,6 +343,31 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
                 ),
               ],
             ),
+            // Add this inside the dialog's Column
+            SizedBox(height: 10,),
+            Row(
+              children: [
+                Checkbox(
+                  value: _isCustomNumber,
+                  onChanged: (val) => setState(() => _isCustomNumber = val ?? false),
+                ),
+                const Text("Use Custom Kuri Number?", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 10),
+                if (_isCustomNumber)
+                  Expanded(
+                    child: TextField(
+                      controller: _customNumberController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        hintText: "e.g. 055",
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
             const SizedBox(height: 12),
             // Result indicator (e.g., 10 Months)
             Container(
@@ -320,10 +425,10 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
               ),
             ),
             const SizedBox(height: 10),
-            TextField(
-              controller: _remarkController,
-              decoration: const InputDecoration(labelText: "Remark (Optional)", border: OutlineInputBorder()),
-            ),
+            // TextField(
+            //   controller: _remarkController,
+            //   decoration: const InputDecoration(labelText: "Remark (Optional)", border: OutlineInputBorder()),
+            // ),
           ],
         ),
       ),
@@ -335,7 +440,7 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
           style: ElevatedButton.styleFrom(backgroundColor: SchemeTheme.primaryBlue),
           child: _isSaving
               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : Text("ENROLL (${_selectedMembers.length})"),
+              : Text("ENROLL (${_selectedMembers.length})",style: TextStyle(color: Colors.white),),
         ),
       ],
     );
