@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class StaffManagementScreen extends StatefulWidget {
   final String userId;
@@ -27,6 +28,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
   bool _isPassVisible = false;
 
   void _showMessage(String msg, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -37,9 +39,25 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
     );
   }
 
-  // --- COMPACT FORM UI ---
+  // --- LOGGING HELPER ---
+  Future<void> _logAction(WriteBatch batch, String action, String targetId, String targetName, Map<String, dynamic> details) async {
+    final logRef = FirebaseFirestore.instance.collection('staff_logs').doc();
+    batch.set(logRef, {
+      'action': action,
+      'targetId': targetId,
+      'targetName': targetName,
+      'performedBy': widget.userId,
+      'performedByName': widget.userName,
+      'timestamp': FieldValue.serverTimestamp(),
+      'details': details,
+    });
+  }
+
   void _showStaffForm({String? docId, Map<String, dynamic>? existingData}) {
-    if (widget.userRole != 'Super Admin') return;
+    if (widget.userRole != 'Super Admin') {
+      _showMessage("Access Denied: Super Admin only", isError: true);
+      return;
+    }
 
     if (existingData != null) {
       _nameCtrl.text = existingData['name'] ?? '';
@@ -131,29 +149,39 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
                     }
 
                     setSheetState(() => _isLoading = true);
+                    final db = FirebaseFirestore.instance;
+                    final batch = db.batch();
 
-                    // CRITICAL FIX: Explicitly Map<String, dynamic> allows FieldValue
                     final Map<String, dynamic> data = {
                       'name': _nameCtrl.text.trim(),
                       'phone': _phoneCtrl.text.trim(),
                       'password': _passCtrl.text.trim(),
                       'role': _selectedRole,
                       'lastUpdatedBy': widget.userName,
+                      'lastUpdatedAt': FieldValue.serverTimestamp(),
                     };
 
                     try {
                       if (docId == null) {
-                        data['createdAt'] = FieldValue.serverTimestamp(); // No more String error
+                        final newDocRef = db.collection('staff_admins').doc();
+                        data['createdAt'] = FieldValue.serverTimestamp();
                         data['addedByUserId'] = widget.userId;
-                        await FirebaseFirestore.instance.collection('staff_admins').add(data);
+
+                        batch.set(newDocRef, data);
+                        await _logAction(batch, 'CREATE', newDocRef.id, data['name'], data);
                       } else {
-                        await FirebaseFirestore.instance.collection('staff_admins').doc(docId).update(data);
+                        final docRef = db.collection('staff_admins').doc(docId);
+                        batch.update(docRef, data);
+                        await _logAction(batch, 'UPDATE', docId, data['name'], {'changes': data});
                       }
+
+                      await batch.commit();
                       if (mounted) Navigator.pop(context);
+                      _showMessage("Staff data saved successfully");
                     } catch (e) {
                       _showMessage("Error: $e", isError: true);
                     }
-                    setSheetState(() => _isLoading = false);
+                    if(mounted) setSheetState(() => _isLoading = false);
                   },
                   child: _isLoading
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -196,7 +224,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           final docs = snapshot.data!.docs;
 
-          if (docs.isEmpty) return const Center(child: Text("No staff found"));
+          if (docs.isEmpty) return const Center(child: Text("No active staff found"));
 
           return ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -225,7 +253,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(icon: const Icon(Icons.edit, size: 18, color: Colors.blue), onPressed: () => _showStaffForm(docId: docs[i].id, existingData: data)),
-                      IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.redAccent), onPressed: () => _confirmDelete(docs[i].id, data['name'])),
+                      IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.redAccent), onPressed: () => _confirmDelete(docs[i].id, data)),
                     ],
                   ) : null,
                 ),
@@ -242,19 +270,48 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
     );
   }
 
-  void _confirmDelete(String id, String name) {
+  void _confirmDelete(String id, Map<String, dynamic> staffData) {
+    if (id == widget.userId) {
+      _showMessage("You cannot delete your own account", isError: true);
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text("Delete?", style: TextStyle(fontSize: 16)),
-        content: Text("Permanently remove $name?"),
+        title: const Text("Confirm Delete", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text("Are you sure you want to remove ${staffData['name']}? A copy will be moved to archives."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text("No")),
-          TextButton(onPressed: () {
-            FirebaseFirestore.instance.collection('staff_admins').doc(id).delete();
-            Navigator.pop(c);
-            _showMessage("Staff removed");
-          }, child: const Text("Yes", style: TextStyle(color: Colors.red))),
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text("CANCEL")),
+          TextButton(
+              onPressed: () async {
+                Navigator.pop(c);
+                final db = FirebaseFirestore.instance;
+                final batch = db.batch();
+
+                try {
+                  // 1. Reference the data to be moved
+                  final deletedRef = db.collection('deleted_staff').doc(id);
+
+                  // 2. Prepare deletion data with extra meta
+                  Map<String, dynamic> archiveData = Map.from(staffData);
+                  archiveData['deletedAt'] = FieldValue.serverTimestamp();
+                  archiveData['deletedBy'] = widget.userName;
+                  archiveData['deletedById'] = widget.userId;
+
+                  // 3. Batch operations (Move to Archive -> Delete from Main -> Log)
+                  batch.set(deletedRef, archiveData);
+                  batch.delete(db.collection('staff_admins').doc(id));
+                  await _logAction(batch, 'DELETE', id, staffData['name'], archiveData);
+
+                  await batch.commit();
+                  _showMessage("Staff member archived and removed");
+                } catch (e) {
+                  _showMessage("Deletion failed: $e", isError: true);
+                }
+              },
+              child: const Text("DELETE", style: TextStyle(color: Colors.red))
+          ),
         ],
       ),
     );

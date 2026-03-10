@@ -20,8 +20,45 @@ class KuriProvider with ChangeNotifier {
     await _db.collection('kuris').add(data);
   }
 
-  Future<void> updateKuri(String id, KuriModel kuri) async {
-    await _db.collection('kuris').doc(id).update(kuri.toMap());
+  Future<void> updateKuri({
+    required String id,
+    required KuriModel updatedKuri,
+    required KuriModel oldKuri,
+    required String userId,
+    required String userName,
+  }) async {
+    final db = FirebaseFirestore.instance;
+    final batch = db.batch();
+
+    // 1. Identify specific changes for the log
+    Map<String, dynamic> oldData = oldKuri.toMap();
+    Map<String, dynamic> newData = updatedKuri.toMap();
+    Map<String, dynamic> changeLog = {};
+
+    newData.forEach((key, value) {
+      if (oldData[key].toString() != value.toString()) {
+        changeLog[key] = {"from": oldData[key], "to": value};
+      }
+    });
+
+    // 2. Perform the Update
+    batch.update(db.collection('kuris').doc(id), newData);
+
+    // 3. Create Audit Log (Only if changes actually happened)
+    if (changeLog.isNotEmpty) {
+      batch.set(db.collection('kuri_logs').doc(), {
+        'kuriId': id,
+        'kuriName': updatedKuri.name,
+        'action': 'UPDATE',
+        'changedBy': userId,
+        'changedByName': userName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'details': changeLog,
+      });
+    }
+
+    await batch.commit();
+    notifyListeners();
   }
 
   Future<void> deleteKuri(String id) async {

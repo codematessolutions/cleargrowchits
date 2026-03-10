@@ -264,17 +264,29 @@ class _KuriDataTable extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _CircleAction(
-                icon: Icons.edit_note_outlined,
-                color: Colors.blue,
-                onTap: () => _KuriFormDialog.show(context, kuri: kuri, userId: userId, userName: userName, userRole: userRole),
-              ),
-              const SizedBox(width: 8),
-              _CircleAction(
-                icon: Icons.delete_outline_rounded,
-                color: KuriTheme.errorRed,
-                onTap: () => _showDeleteConfirm(context, kuri),
-              ),
+              // Only show Edit and Delete if the user is a Super Admin
+              if (userRole == "Super Admin") ...[
+                _CircleAction(
+                  icon: Icons.edit_note_outlined,
+                  color: Colors.blue,
+                  onTap: () => _KuriFormDialog.show(
+                      context,
+                      kuri: kuri,
+                      userId: userId,
+                      userName: userName,
+                      userRole: userRole
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _CircleAction(
+                  icon: Icons.delete_outline_rounded,
+                  color: KuriTheme.errorRed,
+                  onTap: () => _showDeleteConfirm(context, kuri),
+                ),
+              ] else ...[
+                // Optional: Show a "View Only" or "Locked" message/icon for other roles
+                const Text("Read Only", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              ],
             ],
           ),
         ),
@@ -461,33 +473,49 @@ class _KuriFormDialogState extends State<_KuriFormDialog> {
     );
   }
 
-  void _save(DateTime calcEndDate, String userId, String userName,String userRole) async {
+  void _save(DateTime calcEndDate, String userId, String userName, String userRole) async {
     if (_formKey.currentState!.validate()) {
       try {
-        final model = KuriModel(
-            name: _name.text,
-            kuriDate: int.parse(_day.text),
-            startMonth: Timestamp.fromDate(_startDate),
-            endMonth: Timestamp.fromDate(calcEndDate),
-            totalMonths: int.parse(_months.text),
-            monthlyAmount: double.parse(_amount.text),
-            totalAmount: int.parse(_months.text) * double.parse(_amount.text),
-            addedById: userId,
-            addedByName: userName,
-            addedByPhone: userId,
-            userRole: userId,
-
+        // 1. Create the new model from form data
+        final updatedModel = KuriModel(
+          name: _name.text.trim(),
+          kuriDate: int.parse(_day.text),
+          startMonth: Timestamp.fromDate(_startDate),
+          endMonth: Timestamp.fromDate(calcEndDate),
+          totalMonths: int.parse(_months.text),
+          monthlyAmount: double.parse(_amount.text),
+          totalAmount: int.parse(_months.text) * double.parse(_amount.text),
+          // Keep original creator info or update based on your logic
+          addedById: widget.kuri?.addedById ?? userId,
+          addedByName: widget.kuri?.addedByName ?? userName,
+          addedByPhone: widget.kuri?.addedByPhone ?? "",
+          userRole: userRole,
         );
 
         final p = Provider.of<KuriProvider>(context, listen: false);
+
         if (widget.kuri == null) {
-          await p.addKuri(model);
+          // --- ADD NEW KURI ---
+          await p.addKuri(updatedModel);
         } else {
-          await p.updateKuri(widget.kuri!.id!, model);
+          // --- UPDATE EXISTING KURI WITH LOGS ---
+          await p.updateKuri(
+            id: widget.kuri!.id!,        // The document ID
+            updatedKuri: updatedModel,   // The new data
+            oldKuri: widget.kuri!,       // The original data (for logging changes)
+            userId: userId,              // The Admin performing the edit
+            userName: userName,          // The Admin's name
+          );
         }
-        Navigator.pop(context);
+
+        if (mounted) Navigator.pop(context);
       } catch (e) {
-        // Handle error
+        debugPrint("Save Error: $e");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error saving Kuri: $e"), backgroundColor: Colors.red),
+          );
+        }
       }
     }
   }
