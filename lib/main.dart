@@ -7,6 +7,7 @@ import 'admin/providers/kuri_provider.dart';
 import 'admin/screens/admin_home_screen.dart';
 import 'admin/screens/login_page.dart';
 import 'firebase_options.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,7 +61,20 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
-      // --- 2. Conditional Routing ---
+
+      // --- ADD THESE LINES TO FIX DATE FORMAT GLOBALLY ---
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en', 'IN'), // English (India) - Uses DD/MM/YYYY
+        Locale('en', 'GB'), // English (UK) - Uses DD/MM/YYYY
+      ],
+      locale: const Locale('en', 'IN'), // Forces the app to use this locale
+      // ---------------------------------------------------
+
       home: isLoggedIn
           ? AdminHome(
         userId: userId,

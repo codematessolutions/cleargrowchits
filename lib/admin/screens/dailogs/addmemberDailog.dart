@@ -348,20 +348,29 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
                 Expanded(
                   child: InkWell(
                     onTap: () async {
+                      // Normalizing dates to prevent the "out of range" error we discussed
+                      final DateTime first = DateTime(kuriStartDate.year, kuriStartDate.month, kuriStartDate.day);
+                      final DateTime last = DateTime(kuriEndDate.year, kuriEndDate.month, kuriEndDate.day);
+
+                      DateTime initial = selectedJoiningMonth;
+                      if (initial.isBefore(first)) initial = first;
+                      if (initial.isAfter(last)) initial = last;
+
                       final DateTime? picked = await showDatePicker(
                         context: context,
-                        initialDate: selectedJoiningMonth,
-                        firstDate: kuriStartDate,
-                        lastDate: kuriEndDate,
+                        initialDate: initial,
+                        firstDate: first,
+                        lastDate: last,
                       );
                       if (picked != null) setState(() => selectedJoiningMonth = picked);
                     },
                     child: InputDecorator(
                       decoration: const InputDecoration(
-                          labelText: "Start Month",
+                          labelText: "Start Date", // Changed label to reflect full date
                           border: OutlineInputBorder()
                       ),
-                      child: Text(DateFormat('MMM yyyy').format(selectedJoiningMonth)),
+                      // CHANGE THIS LINE: format updated to dd/MM/yyyy
+                      child: Text(DateFormat('dd/MM/yyyy').format(selectedJoiningMonth)),
                     ),
                   ),
                 ),
@@ -689,35 +698,41 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. DATE PICKER
+          // 1. DATE PICKER (Updated to dd/mm/yyyy)
           SizedBox(
-            width: 130,
+            width: 145, // Increased width slightly for dd/mm/yyyy
             child: InkWell(
-              borderRadius: BorderRadius.circular(12),
               onTap: _isSaving ? null : () async {
                 DateTime? p = await showDatePicker(
                   context: context,
                   initialDate: splits[index]['date'],
-                  firstDate: DateTime(2024),
-                  lastDate: DateTime.now(),
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime(2100),
+                  // THIS BUILDER FIXES THE "03/13/2026" PROBLEM
+                  builder: (BuildContext context, Widget? child) {
+                    return Localizations.override(
+                      context: context,
+                      locale: const Locale('en', 'GB'), // GB uses dd/mm/yyyy
+                      child: child!,
+                    );
+                  },
                 );
                 if (p != null) setState(() => splits[index]['date'] = p);
               },
               child: Container(
                 height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFE2E8F0)),
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.calendar_month_rounded, size: 16, color: Colors.blue),
+                    const Icon(Icons.calendar_today, size: 16, color: Colors.blue),
                     const SizedBox(width: 8),
                     Text(
-                      DateFormat('dd-MM-yy').format(splits[index]['date']),
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                      DateFormat('dd/MM/yyyy').format(splits[index]['date']),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),

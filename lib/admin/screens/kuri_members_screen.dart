@@ -1097,24 +1097,26 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
         if (pMonthDoc != null) {
           final pData = pMonthDoc.data() as Map<String, dynamic>;
+
           details = "${pData['mode'] ?? 'Cash'} | ${pData['collectedBy'] ?? '-'}";
 
           if (!hasWon) {
             DateTime pDate = (pData['paidDate'] as Timestamp).toDate();
+            String formattedDate = DateFormat('dd/MM/yy').format(pDate);
             List<String> parts = pData['monthKey'].split('_');
             int targetYear = int.parse(parts[0]);
             int targetMonth = int.parse(parts[1]);
 
             if (pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth)) {
-              status = "Advance";
+              status = "Advance ($formattedDate)";
             } else {
               int drawDay = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '8') ?? 8;
               DateTime drawDate = DateTime(targetYear, targetMonth, drawDay);
               DateTime lastOnTime = drawDate.subtract(const Duration(days: 2));
 
-              if (pDate.isBefore(lastOnTime.add(const Duration(days: 1)))) status = "On-Time";
-              else if (pDate.isBefore(drawDate.add(const Duration(days: 1)))) status = "Late(Ch)";
-              else status = "Late(No)";
+              if (pDate.isBefore(lastOnTime.add(const Duration(days: 1)))) status = "On-Time ($formattedDate)";
+              else if (pDate.isBefore(drawDate.add(const Duration(days: 1)))) status = "Late(Ch) ($formattedDate)";
+              else status = "Late(No) ($formattedDate)";
             }
           }
         }
