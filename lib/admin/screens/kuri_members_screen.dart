@@ -1259,91 +1259,166 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 // --- EDIT DIALOG ---
   void _showEditEnrollmentDialog(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+
+    // 1. Initialize Controllers with exact existing data
     final nameCtrl = TextEditingController(text: data['name']);
     final phoneCtrl = TextEditingController(text: data['phone']);
-
-    // Ensure the kuriNumber is padded for consistency if needed (e.g., 001)
     final kNoCtrl = TextEditingController(text: data['kuriNumber']?.toString());
+    final amtCtrl = TextEditingController(text: data['monthlyAmount']?.toString());
 
-    bool _isChecking = false;
+    // 2. Get the Master Kuri amount for validation
+    final double masterKuriAmount = double.tryParse(widget.kuriData['monthlyAmount']?.toString() ?? '0') ?? 0.0;
+    final String oldKuriNumber = data['kuriNumber']?.toString() ?? "";
+
+    // 3. Parse existing Joining Month
+    DateTime currentJoiningDate;
+    try {
+      List<String> parts = data['joiningMonth'].toString().split('_');
+      currentJoiningDate = DateTime(int.parse(parts[0]), int.parse(parts[1]), 1);
+    } catch (e) {
+      currentJoiningDate = DateTime.now();
+    }
+
+    bool _isSaving = false;
 
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text("Edit Enrollment"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: "Name")),
-                  TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: "Phone")),
-                  TextField(
-                    controller: kNoCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: "Kuri Number"),
-                  ),
-                ],
+              title: const Text("Edit Member Details", style: TextStyle(fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: "Member Name")),
+                    TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: "Phone Number"), keyboardType: TextInputType.phone),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: kNoCtrl,
+                            decoration: const InputDecoration(labelText: "Kuri No"),
+                            keyboardType: TextInputType.text, // Allows any format you type
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: amtCtrl,
+                            decoration: InputDecoration(
+                                labelText: "Monthly Amt",
+                                prefixText: "₹",
+                                hintText: "Max $masterKuriAmount"
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    // DATE SELECTOR (DD/MM/YYYY)
+                    InkWell(
+                      onTap: () async {
+                        final DateTime? picked = await showDatePicker(
+                          context: context,
+                          initialDate: currentJoiningDate,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                          builder: (context, child) => Localizations.override(
+                            context: context,
+                            locale: const Locale('en', 'GB'),
+                            child: child!,
+                          ),
+                        );
+                        if (picked != null) setDialogState(() => currentJoiningDate = picked);
+                      },
+                      child: InputDecorator(
+                        decoration: const InputDecoration(labelText: "Start Date (Joining)", border: OutlineInputBorder()),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(DateFormat('dd/MM/yyyy').format(currentJoiningDate)),
+                            const Icon(Icons.calendar_month, color: Colors.teal),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
                 ElevatedButton(
-                  onPressed: _isChecking ? null : () async {
+                  onPressed: _isSaving ? null : () async {
+                    // We take the exact text from the controller without padding
                     final newKNo = kNoCtrl.text.trim();
-                    final oldKNo = data['kuriNumber']?.toString();
+                    final double newAmt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
 
-                    setDialogState(() => _isChecking = true);
+                    // --- VALIDATIONS ---
+                    if (nameCtrl.text.isEmpty) {
+                      _showMessage("Name is required", isError: true);
+                      return;
+                    }
+                    if (newAmt > masterKuriAmount) {
+                      _showMessage("Amount cannot exceed Kuri monthly amount (₹$masterKuriAmount)", isError: true);
+                      return;
+                    }
+
+                    setDialogState(() => _isSaving = true);
 
                     try {
-                      // 1. ONLY check uniqueness if the number has actually changed
-                      if (newKNo != oldKNo) {
-                        final duplicateCheck = await FirebaseFirestore.instance
+                      // 4. UNIQUENESS CHECK (Exact Match)
+                      if (newKNo != oldKuriNumber) {
+                        final dup = await FirebaseFirestore.instance
                             .collection('enrollments')
                             .where('kuriId', isEqualTo: widget.kuriId)
                             .where('kuriNumber', isEqualTo: newKNo)
                             .get();
-
-                        if (duplicateCheck.docs.isNotEmpty) {
-                          _showMessage("Kuri Number $newKNo is already assigned!", isError: true);
-                          setDialogState(() => _isChecking = false);
+                        if (dup.docs.isNotEmpty) {
+                          _showMessage("Kuri Number $newKNo is already taken!", isError: true);
+                          setDialogState(() => _isSaving = false);
                           return;
                         }
                       }
 
-                      // 2. Proceed with Update if unique or unchanged
                       final db = FirebaseFirestore.instance;
                       final batch = db.batch();
-                      final updates = {
+
+                      final Map<String, dynamic> updates = {
                         'name': nameCtrl.text.trim().toUpperCase(),
                         'phone': phoneCtrl.text.trim(),
-                        'kuriNumber': newKNo,
+                        'kuriNumber': newKNo, // Stored exactly as entered
+                        'monthlyAmount': newAmt,
+                        'joiningMonth': DateFormat('yyyy_MM').format(currentJoiningDate),
                         'lastEditedBy': widget.userName,
+                        'lastEditedAt': FieldValue.serverTimestamp(),
                       };
 
                       batch.update(db.collection('enrollments').doc(doc.id), updates);
-                      await _logEnrollmentAction(batch, 'UPDATE', doc.id, data['name'], {'old': data, 'new': updates});
 
                       await batch.commit();
                       Navigator.pop(context);
                       _fetchMembers(isInitial: true);
-                      _showMessage("Enrollment updated successfully");
+                      _showMessage("Details updated successfully");
                     } catch (e) {
                       _showMessage("Error: $e", isError: true);
                     } finally {
-                      if (mounted) setDialogState(() => _isChecking = false);
+                      if (mounted) setDialogState(() => _isSaving = false);
                     }
                   },
-                  child: _isChecking
+                  child: _isSaving
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Text("UPDATE"),
-                )
+                ),
               ],
             );
           }
       ),
     );
   }
-
 // --- DELETE (ARCHIVE) LOGIC ---
   void _confirmDeleteEnrollment(String id, Map<String, dynamic> data) {
     showDialog(
