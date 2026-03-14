@@ -50,6 +50,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
   String get monthKey => DateFormat('yyyy_MM').format(selectedMonth);
 
   final ScrollController _verticalScroll = ScrollController();
+  final ScrollController _horizontalScroll = ScrollController();
   late TextEditingController _nameController;
   late TextEditingController _numberController;
 
@@ -64,18 +65,26 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     _fetchMembers(isInitial: true);
 
     _verticalScroll.addListener(() {
-      // Check if we are near the bottom (200 pixels remaining)
-      // This is more reliable than 90% for long tables
+      // 1. Immediate exit if already loading to save CPU
+      if (_isLoadingMore || !_hasMore) return;
+
       double maxScroll = _verticalScroll.position.maxScrollExtent;
       double currentScroll = _verticalScroll.position.pixels;
-      double delta = 200.0; // Trigger load when 200px from bottom
+      double delta = 200.0;
 
       if (maxScroll - currentScroll <= delta) {
-        if (!_isLoadingMore && _hasMore) {
-          _fetchMembers(isInitial: false);
-        }
+        _fetchMembers(isInitial: false);
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _verticalScroll.dispose();
+    _horizontalScroll.dispose();
+    _nameController.dispose();
+    _numberController.dispose();
+    super.dispose();
   }
 
   double _parseNum(dynamic val) {
@@ -521,12 +530,16 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
             final allPayments = pSnap.data!.docs;
 
-            // Map for current selected month view
+            // Map payments for the current month view
             Map<String, Map<String, dynamic>> currentMonthPaidMap = {
               for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
-                doc['memberId'].toString(): doc.data() as Map<String, dynamic>
+                doc['memberId'].toString(): {
+                  ...doc.data() as Map<String, dynamic>,
+                  'id': doc.id,
+                }
             };
 
+            // Filter members based on Status (Paid/Pending) but keep everyone in the list
             List<DocumentSnapshot> filteredList = _allMembers.where((mDoc) {
               final mid = mDoc.id;
               final isPaid = currentMonthPaidMap.containsKey(mid);
@@ -544,16 +557,20 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                     child: SingleChildScrollView(
                       controller: _verticalScroll,
                       physics: const AlwaysScrollableScrollPhysics(),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            DataTable(
+                      child: Scrollbar(
+                        controller: _horizontalScroll,
+                        thumbVisibility: true,
+                        notificationPredicate: (notif) => notif.depth == 1,
+                        child: SingleChildScrollView(
+                          controller: _horizontalScroll,
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width),
+                            child: DataTable(
                               headingRowHeight: 45,
-                              dataRowMaxHeight: 50,
-                              columnSpacing: 45,
+                              dataRowMaxHeight: 60,
+                              columnSpacing: 25,
                               headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
                               border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
                               columns: const [
@@ -580,52 +597,62 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
                                 double monthlyAmount = _parseNum(d['monthlyAmount']);
                                 int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
+
+                                // Winner Logic
                                 String? winnerMonth = d['winnerMonth'];
-                                bool hasWon = winnerMonth != null;
+                                bool hasWonInThisMonth = winnerMonth == monthKey;
+
+                                // Logic to check if they won in a PAST month
+                                bool wonInPast = false;
+                                if (winnerMonth != null && winnerMonth != monthKey) {
+                                  List<String> currentParts = monthKey.split('_');
+                                  List<String> winParts = winnerMonth.split('_');
+                                  int cY = int.parse(currentParts[0]), cM = int.parse(currentParts[1]);
+                                  int wY = int.parse(winParts[0]), wM = int.parse(winParts[1]);
+                                  if (wY < cY || (wY == cY && wM < cM)) wonInPast = true;
+                                }
 
                                 final mPayments = allPayments.where((p) => p['memberId'] == mid).toList();
                                 int displayPaidCount = mPayments.length;
-                                int displayTotalCount = hasWon ? mPayments.length : totalMonths;
+                                int displayTotalCount = (winnerMonth != null) ? mPayments.length : totalMonths;
 
                                 double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum((p.data() as Map<String, dynamic>)['amount']));
-                                double balance = hasWon ? 0.0 : (monthlyAmount * totalMonths) - totalPaid;
+                                double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaid;
 
                                 return DataRow(
-                                  color: hasWon ? WidgetStateProperty.all(Colors.amber.shade50) : null,
+                                  color: hasWonInThisMonth
+                                      ? WidgetStateProperty.all(Colors.amber.shade50)
+                                      : (wonInPast ? WidgetStateProperty.all(Colors.green.shade50) : null),
                                   cells: [
                                     DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontWeight: FontWeight.bold))),
-                                    DataCell(Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(d['name'].toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                                        Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                                      ],
+                                    DataCell(SizedBox(
+                                      width: 150,
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(d['name'].toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                                          Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                        ],
+                                      ),
                                     )),
                                     DataCell(Text(d['place']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
                                     DataCell(Text(d['joiningMonth']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
-
                                     DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 11))),
                                     DataCell(Text("$displayPaidCount/$displayTotalCount",
                                         style: TextStyle(
                                           fontSize: 11,
-                                          fontWeight: hasWon ? FontWeight.bold : FontWeight.normal,
-                                          color: hasWon ? Colors.blue.shade900 : Colors.black,
+                                          fontWeight: (winnerMonth != null) ? FontWeight.bold : FontWeight.normal,
+                                          color: (winnerMonth != null) ? Colors.blue.shade900 : Colors.black,
                                         ))),
                                     DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
                                     DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance),
                                         style: TextStyle(color: balance > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-
-                                    // STATUS BADGE
                                     DataCell(_buildStatusBadge(isPaid, pMonth, winnerMonth)),
-
-                                    // DATE CELL with custom color
                                     DataCell(Text(
                                         isPaid ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-",
                                         style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w500)
                                     )),
-
-                                    // MODE & SPLITS CELL
                                     DataCell(isPaid ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -635,58 +662,98 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                           Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
                                       ],
                                     ) : const Text("-")),
-
-                                    // COLLECTOR CELL
-                                    DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 14, color: Colors.teal))),
-
-                                    // ENTRY BY CELL
+                                    DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 12, color: Colors.teal))),
                                     DataCell(isPaid ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize:11, fontWeight: FontWeight.bold, color: Colors.brown)),
+                                        Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize:10, fontWeight: FontWeight.bold, color: Colors.brown)),
                                         if (pMonth['paidAt'] != null)
-                                          Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                          Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 9, color: Colors.grey)),
                                       ],
                                     ) : const Text("-")),
-
                                     DataCell(Row(
+                                      mainAxisSize: MainAxisSize.min,
                                       children: [
+                                        // --- CASE 1: WINNER (Current or Past) ---
+                                        if (winnerMonth != null) ...[
+                                          if (wonInPast)
+                                            const Row(
+                                              children: [
+                                                Icon(Icons.verified, color: Colors.green, size: 18),
+                                                SizedBox(width: 4),
+                                                Text("FINISHED", style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.bold)),
+                                              ],
+                                            )
+                                          else
+                                            const Icon(Icons.stars, color: Colors.orange, size: 24),
 
-                                          _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
+                                          const SizedBox(width: 10),
+
+                                          // Keep only WhatsApp for communication
                                           IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
+                                            onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
+                                          ),
+                                        ]
+
+                                        // --- CASE 2: ACTIVE MEMBER (Not a Winner Yet) ---
+                                        else ...[
+                                          // Payment / Edit Payment
+                                          if (isPaid)
+                                            IconButton(
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(),
+                                              icon: const Icon(Icons.edit_calendar, color: Colors.orange, size: 18),
+                                              onPressed: () => _showMarkPaymentDialog(
+                                                mid, d['name'], d['masterId'] ?? mid, monthlyAmount,
+                                                existingPayment: pMonth,
+                                              ),
+                                            )
+                                          else
+                                            _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
+
+                                          // WhatsApp
+                                          IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
                                             icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
                                             onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
                                           ),
 
+                                          // Super Admin Tools (Only for non-winners)
+                                          if (widget.userRole == 'Super Admin') ...[
+                                            IconButton(
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(),
+                                              icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
+                                              onPressed: () => _showEditEnrollmentDialog(m),
+                                            ),
+                                            IconButton(
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(),
+                                              icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
+                                              onPressed: () => _confirmDeleteEnrollment(m.id, d),
+                                            ),
+                                          ],
 
-                                        if (widget.userRole == 'Super Admin') ...[
+                                          // Winner Button
                                           IconButton(
-                                            icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
-                                            onPressed: () => _showEditEnrollmentDialog(m), // m is the DocumentSnapshot
-                                          ),
-                                          IconButton(
-                                            icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
-                                            onPressed: () => _confirmDeleteEnrollment(m.id, d), // d is the data map
-                                          ),
-                                        ],
-                                        if (hasWon)
-                                          const Padding(
-                                            padding: EdgeInsets.only(left: 8.0),
-                                            child: Icon(Icons.stars, color: Colors.orange, size: 22),
-                                          )
-                                        else
-                                          IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
                                             icon: Icon(Icons.emoji_events_outlined, color: isPaid ? Colors.blue : Colors.grey.shade400),
                                             onPressed: () => _markAsWinner(mid, d['name'], isPaid, pMonth),
                                           ),
+                                        ],
                                       ],
                                     )),
                                   ],
                                 );
                               }).toList(),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -979,7 +1046,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
-  void _showMarkPaymentDialog(String enrollmentId, String name, String masterId, double monthlyAmount) async {
+  void _showMarkPaymentDialog(String enrollmentId, String name, String masterId, double monthlyAmount, {Map<String, dynamic>? existingPayment}) async {
+    // Fetch admins for the collector dropdown
     final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
     Map<String, String> adminIdMap = {for (var doc in adminSnap.docs) doc['name'].toString(): doc.id};
     List<String> adminNames = adminIdMap.keys.toList();
@@ -988,18 +1056,18 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
     showDialog(
       context: context,
-      barrierDismissible: false, // Prevents closing dialog by clicking outside during save
+      barrierDismissible: false,
       builder: (c) => MarkPaymentDialog(
         memberName: name,
         fullAmount: monthlyAmount,
         adminList: adminNames,
+        initialSplits: existingPayment?['paymentSplits'],
         onConfirm: (splits, firstSplitDate) async {
           try {
-            // Calculate total from splits locally for the record
             double totalCollected = splits.fold(0.0, (sum, s) => sum + (s['amount'] as double));
             String splitAmountsStr = splits.map((s) => s['amount'].toString()).join(", ");
 
-            await FirebaseFirestore.instance.collection('payments').add({
+            final data = {
               'kuriId': widget.kuriId,
               'memberId': enrollmentId,
               'masterId': masterId,
@@ -1014,37 +1082,34 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 'collectorId': adminIdMap[s['collector']] ?? "",
                 'amount': s['amount'],
                 'mode': s['mode'],
-                'date': s['date'],
+                'date': s['date'] is Timestamp ? s['date'] : Timestamp.fromDate(s['date']),
               }).toList(),
-              // Using the date from the first split as primary paidDate
               'paidDate': Timestamp.fromDate(firstSplitDate),
-              'paidAt': FieldValue.serverTimestamp(),
-              'addedById': widget.userId,
-              'addedByName': widget.userName,
-            });
+              'lastEditedAt': FieldValue.serverTimestamp(),
+              'lastEditedBy': widget.userName,
+            };
 
-            _fetchMembers(isInitial: true);
+            if (existingPayment != null && existingPayment.containsKey('id')) {
+              await FirebaseFirestore.instance.collection('payments').doc(existingPayment['id']).update(data);
+            } else {
+              data['paidAt'] = FieldValue.serverTimestamp();
+              data['addedById'] = widget.userId;
+              data['addedByName'] = widget.userName;
+              await FirebaseFirestore.instance.collection('payments').add(data);
+            }
 
-            // CRITICAL: Close using 'c' (the dialog context)
-            if (mounted) Navigator.pop(c);
-
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Paid Successfully"), backgroundColor: Colors.green)
-            );
+            if (mounted) {
+              _fetchMembers(isInitial: true);
+              Navigator.pop(c);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Payment Saved Successfully"), backgroundColor: Colors.green));
+            }
           } catch (e) {
-            // If error occurs, we should allow the user to try again
-            // (The _isSaving logic in the dialog state should be reset if needed,
-            // but usually, errors here are handled by keeping the dialog open)
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
-            );
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
           }
         },
       ),
     );
   }
-  // --- HELPERS ---
-
   Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
     Text("$label:", style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
     const SizedBox(width: 4), Expanded(child: child)
