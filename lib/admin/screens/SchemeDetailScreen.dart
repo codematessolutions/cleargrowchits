@@ -306,11 +306,11 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
               : const Text("-")
           ),
           DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance), style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.bold))),
-          DataCell(Container(
-              child: (isPaid || hasWonInPast || isCurrentMonthWinner)
-                  ? _buildStatusBadge(isPaid, hasWonInPast, isCurrentMonthWinner, pMonth)
-                  : _buildPayButton(enrollmentId, memberName, d['masterId'] ?? "")
-          )),
+          // DataCell(Container(
+          //     child: (isPaid || hasWonInPast || isCurrentMonthWinner)
+          //         ? _buildStatusBadge(isPaid, hasWonInPast, isCurrentMonthWinner, pMonth)
+          //         : _buildPayButton(enrollmentId, memberName, d['masterId'] ?? "")
+          // )),
           DataCell(Text(
               isPaid && pMonth?['paidDate'] != null
                   ? DateFormat('dd-MM-yy  hh:mm a').format((pMonth!['paidDate'] as Timestamp).toDate())
@@ -429,18 +429,18 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     );
   }
 
-  Widget _buildPayButton(String enrollmentId, String name, String masterId) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.red,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        minimumSize: const Size(60, 30),
-        elevation: 0,
-      ),
-      onPressed: () => _showMarkPaymentDialog(enrollmentId, name, masterId),
-      child: const Text("PAY", style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
-    );
-  }
+  // Widget _buildPayButton(String enrollmentId, String name, String masterId) {
+  //   return ElevatedButton(
+  //     style: ElevatedButton.styleFrom(
+  //       backgroundColor: Colors.red,
+  //       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+  //       minimumSize: const Size(60, 30),
+  //       elevation: 0,
+  //     ),
+  //     onPressed: () => _showMarkPaymentDialog(enrollmentId, name, masterId),
+  //     child: const Text("PAY", style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+  //   );
+  // }
 
   void _confirmWinner(String enrollmentId, String name, bool isPaid, Map<String, dynamic>? pMonth) {
     // 1. Basic Check: Must be paid
@@ -546,82 +546,82 @@ class _SchemeDetailScreenState extends State<SchemeDetailScreen> {
     );
   }
 
-  void _showMarkPaymentDialog(String enrollmentId, String name, String masterId) async {
-    // 1. Fetch both Name and ID from staff_admins
-    final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
-
-    // Create a Map for easy ID lookup: { "John": "ID123", "Jane": "ID456" }
-    Map<String, String> adminIdMap = {
-      for (var doc in adminSnap.docs) doc['name'].toString(): doc.id
-    };
-
-    List<String> adminNames = adminIdMap.keys.toList();
-
-    if (!mounted) return;
-
-    showDialog(
-        context: context,
-        builder: (c) => MarkPaymentDialog(
-          memberName: name,
-          fullAmount: _parseNum(widget.schemeData['monthlyAmount']),
-          adminList: adminNames,
-          onConfirm: (splits, totalCollected) async {
-            try {
-              // 1. Prepare Split Array for Audit
-              List<Map<String, dynamic>> splitArray = splits.map((s) => {
-                'collectorName': s['collector'],
-                'collectorId': adminIdMap[s['collector']] ?? "",
-                'amount': s['amount'],
-                'mode': s['mode'],
-                'date': s['date'],
-              }).toList();
-
-              // 2. Add to Firestore
-              await FirebaseFirestore.instance.collection('payments').add({
-                'kuriId': widget.schemeData['kuriId'],
-                'schemeId': widget.schemeId,
-                'memberId': enrollmentId,
-                'masterId': masterId,
-                'monthKey': monthKey,
-                'amount': widget.schemeData['monthlyAmount'],
-                'splitAmounts': splits.map((s) => s['amount'].toString()).join(", "),
-                'mode': splits.map((s) => s['mode'].toString()).join(", "),
-                'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
-                'collectorIds': splits.map((s) => adminIdMap[s['collector']] ?? "").join(", "),
-                'paymentSplits': splitArray,
-                'paidDate': Timestamp.fromDate(splits.last['date']),
-                'paidAt': FieldValue.serverTimestamp(),
-                'status': _calculatePaymentStatus(splits.last['date']),
-                'addedById': widget.userId,
-                'addedByName': widget.userName,
-              });
-
-              if (mounted) {
-                // 3. CLOSE ONLY THE DIALOG
-                // Navigator.of(c).pop();
-
-                // 4. REFRESH THE CURRENT TABLE
-                // This ensures the "Pay" button turns into a "PAID" badge instantly
-                _fetchMembers(isInitial: true);
-
-                // 5. SUCCESS FEEDBACK
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Payment Successful"),
-                      backgroundColor: Colors.green,
-                      duration: Duration(seconds: 2),
-                    )
-                );
-              }
-            } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
-              );
-            }
-          },
-        )
-    );
-  }
+  // void _showMarkPaymentDialog(String enrollmentId, String name, String masterId) async {
+  //   // 1. Fetch both Name and ID from staff_admins
+  //   final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
+  //
+  //   // Create a Map for easy ID lookup: { "John": "ID123", "Jane": "ID456" }
+  //   Map<String, String> adminIdMap = {
+  //     for (var doc in adminSnap.docs) doc['name'].toString(): doc.id
+  //   };
+  //
+  //   List<String> adminNames = adminIdMap.keys.toList();
+  //
+  //   if (!mounted) return;
+  //
+  //   showDialog(
+  //       context: context,
+  //       builder: (c) => MarkPaymentDialog(
+  //         memberName: name,
+  //         fullAmount: _parseNum(widget.schemeData['monthlyAmount']),
+  //         adminList: adminNames,
+  //         onConfirm: (splits, totalCollected) async {
+  //           try {
+  //             // 1. Prepare Split Array for Audit
+  //             List<Map<String, dynamic>> splitArray = splits.map((s) => {
+  //               'collectorName': s['collector'],
+  //               'collectorId': adminIdMap[s['collector']] ?? "",
+  //               'amount': s['amount'],
+  //               'mode': s['mode'],
+  //               'date': s['date'],
+  //             }).toList();
+  //
+  //             // 2. Add to Firestore
+  //             await FirebaseFirestore.instance.collection('payments').add({
+  //               'kuriId': widget.schemeData['kuriId'],
+  //               'schemeId': widget.schemeId,
+  //               'memberId': enrollmentId,
+  //               'masterId': masterId,
+  //               'monthKey': monthKey,
+  //               'amount': widget.schemeData['monthlyAmount'],
+  //               'splitAmounts': splits.map((s) => s['amount'].toString()).join(", "),
+  //               'mode': splits.map((s) => s['mode'].toString()).join(", "),
+  //               'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
+  //               'collectorIds': splits.map((s) => adminIdMap[s['collector']] ?? "").join(", "),
+  //               'paymentSplits': splitArray,
+  //               'paidDate': Timestamp.fromDate(splits.last['date']),
+  //               'paidAt': FieldValue.serverTimestamp(),
+  //               'status': _calculatePaymentStatus(splits.last['date']),
+  //               'addedById': widget.userId,
+  //               'addedByName': widget.userName,
+  //             });
+  //
+  //             if (mounted) {
+  //               // 3. CLOSE ONLY THE DIALOG
+  //               // Navigator.of(c).pop();
+  //
+  //               // 4. REFRESH THE CURRENT TABLE
+  //               // This ensures the "Pay" button turns into a "PAID" badge instantly
+  //               _fetchMembers(isInitial: true);
+  //
+  //               // 5. SUCCESS FEEDBACK
+  //               ScaffoldMessenger.of(context).showSnackBar(
+  //                   const SnackBar(
+  //                     content: Text("Payment Successful"),
+  //                     backgroundColor: Colors.green,
+  //                     duration: Duration(seconds: 2),
+  //                   )
+  //               );
+  //             }
+  //           } catch (e) {
+  //             ScaffoldMessenger.of(context).showSnackBar(
+  //                 SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red)
+  //             );
+  //           }
+  //         },
+  //       )
+  //   );
+  // }
   // --- EXISTING UI COMPONENTS ---
   Widget _buildDetailRibbonFromState() {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);

@@ -482,7 +482,7 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
 class MarkPaymentDialog extends StatefulWidget {
   final String memberName;
   final double fullAmount;
-  final List<String> adminList;
+  final List<Map<String, String>> adminList; // Changed to List of Maps
   final List<dynamic>? initialSplits;
   final Function(List<Map<String, dynamic>> splits, DateTime date) onConfirm;
 
@@ -510,30 +510,21 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
     if (widget.initialSplits != null) {
       splits = widget.initialSplits!.map((s) {
-        // 1. Fetch using the key you use in Firestore: 'collectorName'
-        String rawName = (s['collectorName'] ?? "").toString().trim();
-        print(rawName+"ddddddd");
+        String savedId = (s['collectorId'] ?? "").toString();
 
-        // 2. Find the exact match in adminList (handles case-sensitivity or hidden spaces)
-        String? matchedName;
-        try {
-          matchedName = widget.adminList.firstWhere(
-                (admin) => admin.trim().toLowerCase() == rawName.toLowerCase(),
-          );
-        } catch (e) {
-          matchedName = null; // Reset to null if no match found in current admin list
-        }
+        // Match based on ID
+        bool idExists = widget.adminList.any((admin) => admin['id'] == savedId);
 
         return {
           "mode": s['mode'],
           "amount": double.tryParse(s['amount'].toString()) ?? 0.0,
-          "collector": matchedName,
+          "collectorId": idExists ? savedId : null,
           "date": s['date'] is Timestamp ? (s['date'] as Timestamp).toDate() : s['date'],
         };
       }).toList();
     } else {
       splits = [
-        {"mode": null, "amount": 0.0, "collector": null, "date": DateTime.now()}
+        {"mode": null, "amount": 0.0, "collectorId": null, "date": DateTime.now()}
       ];
     }
 
@@ -541,6 +532,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
         TextEditingController(text: s['amount'] > 0 ? s['amount'].toInt().toString() : "")
     ).toList();
   }
+
   @override
   void dispose() {
     for (var controller in _amountControllers) { controller.dispose(); }
@@ -552,7 +544,8 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   @override
   Widget build(BuildContext context) {
     bool isTotalMatched = totalEntered.toInt() == widget.fullAmount.toInt();
-    bool areFieldsFilled = !splits.any((s) => s['collector'] == null || s['mode'] == null || s['amount'] <= 0);
+    // Check collectorId instead of collector name
+    bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
     bool isComplete = isTotalMatched && areFieldsFilled && !_isSaving;
 
     return Dialog(
@@ -595,71 +588,50 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Date Picker Box
           SizedBox(width: 145, child: _dateBox(index)),
           const SizedBox(width: 8),
-
-          // Amount Input
           SizedBox(width: 110, child: _inputWrapper(TextFormField(
             controller: _amountControllers[index],
             enabled: !_isSaving,
             keyboardType: TextInputType.number,
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-            decoration: const InputDecoration(
-                prefixText: "₹ ",
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 12)
-            ),
+            decoration: const InputDecoration(prefixText: "₹ ", border: InputBorder.none, contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 12)),
             onChanged: (v) => setState(() => splits[index]['amount'] = double.tryParse(v) ?? 0.0),
           ))),
           const SizedBox(width: 8),
-
-          // Payment Mode Dropdown
           Expanded(child: _inputWrapper(DropdownButtonFormField<String>(
             value: splits[index]['mode'],
             isDense: true,
             hint: const Text("Select Mode", style: TextStyle(fontSize: 13)),
             decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
-            items: ["Cash", "GPay"].map((e) => DropdownMenuItem(
-                value: e,
-                child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))
-            )).toList(),
+            items: ["Cash", "GPay"].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)))).toList(),
             onChanged: _isSaving ? null : (v) => setState(() => splits[index]['mode'] = v),
           ))),
           const SizedBox(width: 8),
 
-          // Collector Dropdown (The Fixed Part)
+          // --- FIXED COLLECTOR DROPDOWN (USING ID) ---
           Expanded(
             child: _inputWrapper(DropdownButtonFormField<String>(
-              // We use the 'collector' key we mapped in initState
-              value: widget.adminList.contains(splits[index]['collector'])
-                  ? splits[index]['collector']
-                  : null,
+              value: splits[index]['collectorId'],
               isDense: true,
               hint: const Text("Select Collector", style: TextStyle(fontSize: 13)),
-              decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12)
-              ),
-              items: widget.adminList.map((String name) {
+              decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
+              items: widget.adminList.map((admin) {
                 return DropdownMenuItem<String>(
-                  value: name,
-                  child: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  value: admin['id'], // ID is the value
+                  child: Text(admin['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), // Name is displayed
                 );
               }).toList(),
-              onChanged: _isSaving ? null : (v) {
-                setState(() => splits[index]['collector'] = v);
-              },
+              onChanged: _isSaving ? null : (v) => setState(() => splits[index]['collectorId'] = v),
             )),
           ),
-
-          // Delete Split Button
           _deleteButton(index),
         ],
       ),
     );
   }
-  // ... (Header, Footer, AddButton, and InputWrapper helpers remain as per your existing logic) ...
+
+  // --- REUSED UI HELPERS ---
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
@@ -713,7 +685,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
       child: OutlinedButton.icon(
         onPressed: _isSaving ? null : () => setState(() {
-          splits.add({"mode": null, "amount": 0.0, "collector": null, "date": DateTime.now()});
+          splits.add({"mode": null, "amount": 0.0, "collectorId": null, "date": DateTime.now()});
           _amountControllers.add(TextEditingController());
         }),
         icon: const Icon(Icons.add_circle_outline),
@@ -738,7 +710,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               setState(() => _isSaving = true);
               await widget.onConfirm(splits, splits.first['date']);
             } : null,
-            child: _isSaving ? const CircularProgressIndicator() : const Text("CONFIRM PAYMENT"),
+            child: _isSaving ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text("CONFIRM PAYMENT"),
           ),
         ]),
       ]),

@@ -530,7 +530,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
             final allPayments = pSnap.data!.docs;
 
-            // Map payments for the current month view
             Map<String, Map<String, dynamic>> currentMonthPaidMap = {
               for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
                 doc['memberId'].toString(): {
@@ -539,7 +538,12 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 }
             };
 
-            // Filter members based on Status (Paid/Pending) but keep everyone in the list
+            // --- STRICT LOCK: Check if ANY member is already the winner for THIS month ---
+            bool anyWinnerThisMonth = _allMembers.any((m) {
+              final data = m.data() as Map<String, dynamic>;
+              return data['winnerMonth'] == monthKey;
+            });
+
             List<DocumentSnapshot> filteredList = _allMembers.where((mDoc) {
               final mid = mDoc.id;
               final isPaid = currentMonthPaidMap.containsKey(mid);
@@ -597,12 +601,9 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
                                 double monthlyAmount = _parseNum(d['monthlyAmount']);
                                 int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
-
-                                // Winner Logic
                                 String? winnerMonth = d['winnerMonth'];
                                 bool hasWonInThisMonth = winnerMonth == monthKey;
 
-                                // Logic to check if they won in a PAST month
                                 bool wonInPast = false;
                                 if (winnerMonth != null && winnerMonth != monthKey) {
                                   List<String> currentParts = monthKey.split('_');
@@ -615,14 +616,15 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                 final mPayments = allPayments.where((p) => p['memberId'] == mid).toList();
                                 int displayPaidCount = mPayments.length;
                                 int displayTotalCount = (winnerMonth != null) ? mPayments.length : totalMonths;
-
                                 double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum((p.data() as Map<String, dynamic>)['amount']));
                                 double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaid;
 
                                 return DataRow(
-                                  color: hasWonInThisMonth
-                                      ? WidgetStateProperty.all(Colors.amber.shade50)
-                                      : (wonInPast ? WidgetStateProperty.all(Colors.green.shade50) : null),
+                                  color: WidgetStateProperty.resolveWith<Color?>((states) {
+                                    if (hasWonInThisMonth) return Colors.amber.shade100;
+                                    if (wonInPast) return Colors.green.shade50;
+                                    return null;
+                                  }),
                                   cells: [
                                     DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontWeight: FontWeight.bold))),
                                     DataCell(SizedBox(
@@ -675,33 +677,9 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                     DataCell(Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        // --- CASE 1: WINNER (Current or Past) ---
-                                        if (winnerMonth != null) ...[
-                                          if (wonInPast)
-                                            const Row(
-                                              children: [
-                                                Icon(Icons.verified, color: Colors.green, size: 18),
-                                                SizedBox(width: 4),
-                                                Text("FINISHED", style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.bold)),
-                                              ],
-                                            )
-                                          else
-                                            const Icon(Icons.stars, color: Colors.orange, size: 24),
-
-                                          const SizedBox(width: 10),
-
-                                          // Keep only WhatsApp for communication
-                                          IconButton(
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                            icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
-                                            onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
-                                          ),
-                                        ]
-
-                                        // --- CASE 2: ACTIVE MEMBER (Not a Winner Yet) ---
-                                        else ...[
-                                          // Payment / Edit Payment
+                                        if (wonInPast) ...[
+                                          const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                                        ] else ...[
                                           if (isPaid)
                                             IconButton(
                                               padding: EdgeInsets.zero,
@@ -715,7 +693,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                           else
                                             _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
 
-                                          // WhatsApp
                                           IconButton(
                                             padding: EdgeInsets.zero,
                                             constraints: const BoxConstraints(),
@@ -723,28 +700,30 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                             onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
                                           ),
 
-                                          // Super Admin Tools (Only for non-winners)
-                                          if (widget.userRole == 'Super Admin') ...[
+                                          // --- WINNER BUTTON LOCK ---
+                                          if (hasWonInThisMonth)
+                                            const Icon(Icons.stars, color: Colors.orange, size: 22)
+                                          else if (!anyWinnerThisMonth) // HIDDEN IF SOMEONE ELSE WON
                                             IconButton(
                                               padding: EdgeInsets.zero,
                                               constraints: const BoxConstraints(),
-                                              icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
-                                              onPressed: () => _showEditEnrollmentDialog(m),
+                                              icon: Icon(Icons.emoji_events_outlined, color: isPaid ? Colors.blue : Colors.grey.shade400),
+                                              onPressed: () => _markAsWinner(mid, d['name'], isPaid, pMonth),
                                             ),
-                                            IconButton(
-                                              padding: EdgeInsets.zero,
-                                              constraints: const BoxConstraints(),
-                                              icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
-                                              onPressed: () => _confirmDeleteEnrollment(m.id, d),
-                                            ),
-                                          ],
+                                        ],
 
-                                          // Winner Button
+                                        if (widget.userRole == 'Super Admin' && !wonInPast) ...[
                                           IconButton(
                                             padding: EdgeInsets.zero,
                                             constraints: const BoxConstraints(),
-                                            icon: Icon(Icons.emoji_events_outlined, color: isPaid ? Colors.blue : Colors.grey.shade400),
-                                            onPressed: () => _markAsWinner(mid, d['name'], isPaid, pMonth),
+                                            icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
+                                            onPressed: () => _showEditEnrollmentDialog(m),
+                                          ),
+                                          IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(),
+                                            icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
+                                            onPressed: () => _confirmDeleteEnrollment(m.id, d),
                                           ),
                                         ],
                                       ],
@@ -767,6 +746,92 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
+  void _markAsWinner(String mid, String name, bool isPaid, Map<String, dynamic>? pMonth) async {
+    if (!isPaid || pMonth == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Validation Error: Member must be 'Paid' to be a winner."), backgroundColor: Colors.red));
+      return;
+    }
+
+    // --- STRICTURE CHECK: Ensure no winner exists for this month in DB ---
+    final db = FirebaseFirestore.instance;
+    final winnerCheck = await db.collection('enrollments')
+        .where('kuriId', isEqualTo: widget.kuriId)
+        .where('winnerMonth', isEqualTo: monthKey)
+        .get();
+
+    if (winnerCheck.docs.isNotEmpty) {
+      String currentWinner = winnerCheck.docs.first['name'] ?? "Someone else";
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("STOP: $currentWinner is already the winner for $monthKey. One winner only."), backgroundColor: Colors.black),
+      );
+      return;
+    }
+
+    // Date Eligibility Check
+    DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
+    List<String> parts = monthKey.split('_');
+    int targetYear = int.parse(parts[0]), targetMonth = int.parse(parts[1]);
+    bool isAdvance = pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth);
+    int drawDaySetting = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '8') ?? 8;
+    DateTime drawDate = DateTime(targetYear, targetMonth, drawDaySetting);
+    if (!isAdvance && DateTime(pDate.year, pDate.month, pDate.day).isAfter(DateTime(drawDate.year, drawDate.month, drawDate.day))) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ENTRY DENIED: This member paid AFTER the draw date."), backgroundColor: Colors.red));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Confirm Kuri Winner"),
+        content: Text("Are you sure you want to mark $name as the winner for $monthKey?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("CANCEL")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              _showLoadingDialog("Finalizing Winner...");
+
+              // Final Backend Double-Check
+              final doubleCheck = await db.collection('enrollments')
+                  .where('kuriId', isEqualTo: widget.kuriId)
+                  .where('winnerMonth', isEqualTo: monthKey)
+                  .get();
+
+              if (doubleCheck.docs.isNotEmpty) {
+                if (!mounted) return;
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Process Aborted: A winner was just assigned by another admin."), backgroundColor: Colors.red));
+                return;
+              }
+
+              final batch = db.batch();
+              batch.update(db.collection('enrollments').doc(mid), {'winnerMonth': monthKey, 'winDate': FieldValue.serverTimestamp(), 'isCompleted': true});
+              batch.update(db.collection('kuris').doc(widget.kuriId), {'lastWinnerName': name, 'lastWinnerMonth': monthKey, 'totalWinners': FieldValue.increment(1)});
+              batch.set(db.collection('winner_logs').doc(), {'kuriId': widget.kuriId, 'memberId': mid, 'memberName': name, 'winMonthKey': monthKey, 'loggedAt': FieldValue.serverTimestamp(), 'processedBy': widget.userName, 'adminId': widget.userId});
+
+              try {
+                await batch.commit();
+                if (!mounted) return;
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winner assigned successfully."), backgroundColor: Colors.green));
+                _fetchMembers(isInitial: true);
+              } catch (e) {
+                if (!mounted) return;
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+              }
+            },
+            child: const Text("CONFIRM WINNER", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 // --- FIXED 5-STATUS BADGE LOGIC ---
   Widget _buildStatusBadge(bool isPaid, Map<String, dynamic>? pMonth, String? winnerMonth) {
     Color bgColor = Color(0xFFF10505);
@@ -886,134 +951,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       ),
     );
   }
-  void _markAsWinner(String mid, String name, bool isPaid, Map<String, dynamic>? pMonth) async {
-    // 1. Initial Validation
-    if (!isPaid || pMonth == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Validation Error: Member must be 'Paid' to be a winner."), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    // --- ELIGIBILITY LOGIC (Matching your Badge Logic) ---
-    DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
-    List<String> parts = monthKey.split('_');
-    int targetYear = int.parse(parts[0]);
-    int targetMonth = int.parse(parts[1]);
-
-    bool isAdvance = pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth);
-    int drawDaySetting = int.tryParse(widget.kuriData['kuriDate']?.toString() ?? '8') ?? 8;
-    DateTime drawDate = DateTime(targetYear, targetMonth, drawDaySetting);
-
-    DateTime pDay = DateTime(pDate.year, pDate.month, pDate.day);
-    DateTime dDay = DateTime(drawDate.year, drawDate.month, drawDate.day);
-
-    // BLOCK: LATE (NO CHANCE)
-    if (!isAdvance && pDay.isAfter(dDay)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("ENTRY DENIED: This member paid AFTER the draw date (No Chance)."), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    // 2. ONE WINNER PER MONTH CHECK (Crucial Update)
-    // Check if someone else already won this month
-    final existingWinnerQuery = await FirebaseFirestore.instance
-        .collection('enrollments')
-        .where('kuriId', isEqualTo: widget.kuriId)
-        .where('winnerMonth', isEqualTo: monthKey)
-        .get();
-
-    if (existingWinnerQuery.docs.isNotEmpty) {
-      String currentWinner = existingWinnerQuery.docs.first['name'] ?? "Someone else";
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("DUPLICATE WINNER: $currentWinner is already the winner for $monthKey."),
-          backgroundColor: Colors.black,
-        ),
-      );
-      return;
-    }
-
-    // 3. Draw Date Enforcement
-    DateTime now = DateTime.now();
-    bool isDrawDateReached = (now.year > targetYear) ||
-        (now.year == targetYear && now.month > targetMonth) ||
-        (now.year == targetYear && now.month == targetMonth && now.day >= drawDaySetting);
-
-    if (!isDrawDateReached) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Draw Lock: Winners for $monthKey cannot be assigned until the $drawDaySetting-th."), backgroundColor: Colors.orange.shade900),
-      );
-      return;
-    }
-
-    // 4. Confirmation Dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text("Confirm Kuri Winner"),
-        content: Text("Are you sure you want to mark $name as the winner for $monthKey?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("CANCEL")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
-            onPressed: () async {
-              Navigator.pop(dialogContext);
-              _showLoadingDialog("Finalizing Winner...");
-
-              final db = FirebaseFirestore.instance;
-              final batch = db.batch();
-
-              // A. Update Enrollment
-              batch.update(db.collection('enrollments').doc(mid), {
-                'winnerMonth': monthKey,
-                'winDate': FieldValue.serverTimestamp(),
-                'isCompleted': true,
-              });
-
-              // B. Update Kuri Summary
-              batch.update(db.collection('kuris').doc(widget.kuriId), {
-                'lastWinnerName': name,
-                'lastWinnerMonth': monthKey,
-                'totalWinners': FieldValue.increment(1),
-              });
-
-              // C. Create Log
-              batch.set(db.collection('winner_logs').doc(), {
-                'kuriId': widget.kuriId,
-                'memberId': mid,
-                'memberName': name,
-                'winMonthKey': monthKey,
-                'loggedAt': FieldValue.serverTimestamp(),
-                'processedBy': widget.userName,
-                'adminId': widget.userId,
-              });
-
-              try {
-                await batch.commit();
-                if (!mounted) return;
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winner assigned successfully."), backgroundColor: Colors.green));
-                _fetchMembers(isInitial: true);
-              } catch (e) {
-                if (!mounted) return;
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
-              }
-            },
-            child: const Text("CONFIRM WINNER", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
 // Utility to ensure UI remains responsive but locked during database writes
   void _showLoadingDialog(String message) {
     showDialog(
@@ -1047,10 +984,17 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
   }
 
   void _showMarkPaymentDialog(String enrollmentId, String name, String masterId, double monthlyAmount, {Map<String, dynamic>? existingPayment}) async {
-    // Fetch admins for the collector dropdown
+    // 1. Fetch admins and create a List of Maps for the dialog
     final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
-    Map<String, String> adminIdMap = {for (var doc in adminSnap.docs) doc['name'].toString(): doc.id};
-    List<String> adminNames = adminIdMap.keys.toList();
+
+    // adminData will be: [{'id': '...', 'name': '...'}, ...]
+    List<Map<String, String>> adminData = adminSnap.docs.map((doc) => {
+      'id': doc.id,
+      'name': doc['name'].toString(),
+    }).toList();
+
+    // Mapping for quick lookup during the Firestore save process
+    Map<String, String> adminIdToNameMap = {for (var doc in adminSnap.docs) doc.id: doc['name'].toString()};
 
     if (!mounted) return;
 
@@ -1060,7 +1004,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       builder: (c) => MarkPaymentDialog(
         memberName: name,
         fullAmount: monthlyAmount,
-        adminList: adminNames,
+        adminList: adminData, // PASSING THE LIST OF MAPS
         initialSplits: existingPayment?['paymentSplits'],
         onConfirm: (splits, firstSplitDate) async {
           try {
@@ -1076,10 +1020,11 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               'collectedTotal': totalCollected,
               'splitAmounts': splitAmountsStr,
               'mode': splits.map((s) => s['mode'].toString()).join(", "),
-              'collectedBy': splits.map((s) => s['collector'].toString()).join(", "),
+              // Fetch name from our map using the ID stored in splits
+              'collectedBy': splits.map((s) => adminIdToNameMap[s['collectorId']] ?? "Unknown").join(", "),
               'paymentSplits': splits.map((s) => {
-                'collectorName': s['collector'],
-                'collectorId': adminIdMap[s['collector']] ?? "",
+                'collectorId': s['collectorId'],
+                'collectorName': adminIdToNameMap[s['collectorId']] ?? "Unknown",
                 'amount': s['amount'],
                 'mode': s['mode'],
                 'date': s['date'] is Timestamp ? s['date'] : Timestamp.fromDate(s['date']),
@@ -1109,8 +1054,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         },
       ),
     );
-  }
-  Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
+  }  Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
     Text("$label:", style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
     const SizedBox(width: 4), Expanded(child: child)
   ]);
