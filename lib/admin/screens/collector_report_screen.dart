@@ -206,5 +206,106 @@ class _CollectorReportWebScreenState extends State<CollectorReportWebScreen> {
   }
 
   // PDF Export logic remains as previously discussed...
-  Future<void> _exportToPdf(data, modes, total) async { /* PDF Code Here */ }
+  Future<void> _exportToPdf(Map<String, Map<String, dynamic>> data, List<String> modes, double grandTotal) async {
+    final pdf = pw.Document();
+    final pdfFormat = NumberFormat.currency(locale: 'en_IN', symbol: 'Rs.', decimalDigits: 0);
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape, // Landscape is better for multiple mode columns
+        margin: const pw.EdgeInsets.all(32),
+        build: (pw.Context context) => [
+          // Header Section
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text("${widget.kuriName} - COLLECTION AUDIT",
+                      style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                  pw.Text("Month: ${DateFormat('MMMM yyyy').format(selectedMonth)}"),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text("Generated on: ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}"),
+                  pw.Text("Total: ${pdfFormat.format(grandTotal)}",
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 20),
+          pw.Divider(),
+          pw.SizedBox(height: 20),
+
+          // Data Table
+          pw.TableHelper.fromTextArray(
+            headers: [
+              'STAFF NAME',
+              ...modes.map((m) => m.toUpperCase()),
+              'TOTAL',
+            ],
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
+            cellHeight: 25,
+            cellAlignments: {
+              0: pw.Alignment.centerLeft,
+              ...Map.fromIterable(
+                Iterable.generate(modes.length + 1),
+                key: (i) => i + 1,
+                value: (_) => pw.Alignment.centerRight,
+              ),
+            },
+            data: [
+              // Rows for each staff
+              ...data.entries.where((e) => e.value['total'] > 0).map((e) => [
+                e.value['name'].toString().toUpperCase(),
+                ...modes.map((m) => pdfFormat.format(e.value['m'][m] ?? 0.0)),
+                pdfFormat.format(e.value['total']),
+              ]),
+              // Grand Total Row
+              [
+                'GRAND TOTAL',
+                ...modes.map((m) {
+                  double colTotal = data.values.fold(0.0, (sum, item) => sum + (item['m'][m] ?? 0.0));
+                  return pdfFormat.format(colTotal);
+                }),
+                pdfFormat.format(grandTotal),
+              ],
+            ],
+          ),
+
+          pw.SizedBox(height: 40),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.end,
+            children: [
+              pw.Column(
+                children: [
+                  pw.Container(
+                    width: 120,
+                    // Move the border inside decoration
+                    decoration: const pw.BoxDecoration(
+                      border: pw.Border(
+                        bottom: pw.BorderSide(width: 1, color: PdfColors.black),
+                      ),
+                    ),
+                  ),
+                  pw.SizedBox(height: 5),
+                  pw.Text("Authorized Signature", style: const pw.TextStyle(fontSize: 10)),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: '${widget.kuriName}_Report_${monthKey}.pdf',
+    );
+  }
 }
