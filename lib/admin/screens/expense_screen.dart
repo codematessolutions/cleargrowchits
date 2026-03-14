@@ -63,22 +63,43 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
                 _buildTabStrip(),
                 Expanded(
                   child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance.collection('expenses').orderBy('date', descending: true).snapshots(),
+                    // Note: Removed .orderBy('date') to prevent crashes if 'date' field is missing.
+                    // Sorting is now handled manually below for safety.
+                    stream: FirebaseFirestore.instance.collection('expenses').snapshots(),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
                       var allDocs = snapshot.data!.docs;
+
+                      // 1. SAFE FILTERING & SORTING
                       var filteredDocs = allDocs.where((doc) {
-                        DateTime d = (doc['date'] as Timestamp).toDate();
+                        final data = doc.data() as Map<String, dynamic>;
+
+                        // Check for 'expenseDate' first (new format), then 'date' (old format)
+                        Timestamp? ts = data['expenseDate'] as Timestamp? ?? data['date'] as Timestamp?;
+
+                        if (ts == null) return false; // Ignore records with no date at all
+
+                        DateTime d = ts.toDate();
+                        // Filter based on the selected month/year from your header
                         return d.year == selectedDate.year && d.month == selectedDate.month;
                       }).toList();
+
+                      // 2. MANUAL SORT (Descending by date)
+                      filteredDocs.sort((a, b) {
+                        final dataA = a.data() as Map<String, dynamic>;
+                        final dataB = b.data() as Map<String, dynamic>;
+                        Timestamp tsA = dataA['expenseDate'] as Timestamp? ?? dataA['date'] as Timestamp? ?? Timestamp.now();
+                        Timestamp tsB = dataB['expenseDate'] as Timestamp? ?? dataB['date'] as Timestamp? ?? Timestamp.now();
+                        return tsB.compareTo(tsA);
+                      });
 
                       return TabBarView(
                         controller: _tabController,
                         children: [
                           _buildOverviewPanel(filteredDocs),
-                          _buildKuriPanel(filteredDocs.where((d) => d['type'] == 'KURI').toList()),
-                          _buildCompanyPanel(filteredDocs.where((d) => d['type'] == 'COMPANY').toList()),
+                          _buildKuriPanel(filteredDocs.where((d) => (d.data() as Map)['type'] == 'KURI').toList()),
+                          _buildCompanyPanel(filteredDocs.where((d) => (d.data() as Map)['type'] == 'COMPANY').toList()),
                           _buildStaffAnalyticsPanel(filteredDocs),
                         ],
                       );
@@ -96,25 +117,63 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
   // --- UI PANELS ---
   Widget _buildOverviewPanel(List<DocumentSnapshot> docs) {
     double kuriTotal = 0, officeTotal = 0;
+
     for (var d in docs) {
-      double amt = double.tryParse(d['amount'].toString()) ?? 0;
-      if (d['type'] == 'KURI') kuriTotal += amt; else officeTotal += amt;
+      final data = d.data() as Map<String, dynamic>;
+      double amt = double.tryParse(data['amount']?.toString() ?? '0') ?? 0;
+      if (data['type'] == 'KURI') {
+        kuriTotal += amt;
+      } else {
+        officeTotal += amt;
+      }
     }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Column(children: [
-        Row(children: [
-          _statCard("TOTAL EXPENSE", kuriTotal + officeTotal, primaryBlue, Icons.account_balance_wallet),
-          const SizedBox(width: 16),
-          _statCard("KURI SCHEMES", kuriTotal, Colors.orange.shade800, Icons.layers),
-          const SizedBox(width: 16),
-          _statCard("OFFICE/COMPANY", officeTotal, Colors.blueAccent, Icons.business),
-        ]),
-        const SizedBox(height: 24),
-        _buildSectionHeader("Recent Activities"),
-        const SizedBox(height: 12),
-        Container(height: 500, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)), child: _buildDataTable(docs.take(15).toList())),
-      ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // FIXED: Using LayoutBuilder instead of Expanded to prevent ParentData errors
+          LayoutBuilder(
+            builder: (context, constraints) {
+              double cardWidth = (constraints.maxWidth - 32) / 3;
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  SizedBox(width: cardWidth, child: _statCard("TOTAL EXPENSE", kuriTotal + officeTotal, primaryBlue, Icons.account_balance_wallet)),
+                  SizedBox(width: cardWidth, child: _statCard("KURI EXPENSE", kuriTotal, Colors.orange.shade800, Icons.layers)),
+                  SizedBox(width: cardWidth, child: _statCard("OFFICE/COMPANY", officeTotal, Colors.blueAccent, Icons.business)),
+                ],
+              );
+            },
+          ),
+
+          const SizedBox(height: 32),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildSectionHeader("Recent Activities"),
+
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))
+              ],
+            ),
+            // We pass the list directly; _buildDataTable handles its own constraints
+            child: _buildDataTable(docs.take(15).toList()),
+          ),
+        ],
+      ),
     );
   }
 
@@ -123,26 +182,90 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
 
   Widget _buildStandardPanel(String title, List<DocumentSnapshot> docs) => Padding(
     padding: const EdgeInsets.all(24),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _buildSectionHeader(title),
-      const SizedBox(height: 12),
-      Expanded(child: _buildDataTable(docs)),
-    ]),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionHeader(title),
+        const SizedBox(height: 12),
+        // Table is now scrollable here safely
+        Expanded(child: SingleChildScrollView(child: _buildDataTable(docs))),
+      ],
+    ),
   );
+
+  Widget _buildDataTable(List<DocumentSnapshot> docs) {
+    final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+
+    // REMOVED SingleChildScrollView from here
+    return SizedBox(
+      width: double.infinity,
+      child: DataTable(
+        headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+        columns: const [
+          DataColumn(label: Text("ENTRY BY")),
+          DataColumn(label: Text("EXP. DATE")),
+          DataColumn(label: Text("STAFF")),
+          DataColumn(label: Text("DESC")),
+          DataColumn(label: Text("AMOUNT")),
+          DataColumn(label: Text("ACTION")),
+        ],
+        rows: docs.map((d) {
+          final data = d.data() as Map<String, dynamic>;
+
+          final DateTime expDate = data['expenseDate'] != null
+              ? (data['expenseDate'] as Timestamp).toDate()
+              : (data['date'] != null ? (data['date'] as Timestamp).toDate() : DateTime.now());
+
+          final Map<String, dynamic>? entry = data['entryDetails'] as Map<String, dynamic>?;
+          final String addedBy = entry?['addedByUserName'] ?? data['userName'] ?? 'Admin';
+          final DateTime addedAt = (entry?['addedAt'] as Timestamp?)?.toDate() ??
+              (data['date'] as Timestamp?)?.toDate() ??
+              DateTime.now();
+
+          return DataRow(cells: [
+            DataCell(Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(addedBy.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.brown)),
+                  Text(DateFormat('dd-MM hh:mm a').format(addedAt), style: const TextStyle(color: Colors.grey, fontSize: 10)),
+                ])),
+            DataCell(Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(6)),
+                child: Text(DateFormat('dd/MM/yyyy').format(expDate),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue)))),
+            DataCell(Text(data['staffName'] ?? "-")),
+            DataCell(Text(data['title'].toString().toUpperCase(), style: const TextStyle(fontSize: 11))),
+            DataCell(Text(currencyFormat.format(data['amount']), style: const TextStyle(fontWeight: FontWeight.bold))),
+            DataCell(IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
+              onPressed: () => _confirmDelete(d),
+            )),
+          ]);
+        }).toList(),
+      ),
+    );
+  }
+
+
 
   Widget _buildStaffAnalyticsPanel(List<DocumentSnapshot> docs) {
     Map<String, double> staffTotals = {};
     Map<String, int> staffCounts = {};
+
     for (var d in docs) {
-      String name = d['staffName'] ?? "Unknown";
-      double amt = double.tryParse(d['amount'].toString()) ?? 0;
+      final data = d.data() as Map<String, dynamic>;
+      String name = data['staffName'] ?? "Unknown";
+      double amt = double.tryParse(data['amount']?.toString() ?? '0') ?? 0;
       staffTotals[name] = (staffTotals[name] ?? 0) + amt;
       staffCounts[name] = (staffCounts[name] ?? 0) + 1;
     }
 
     final filteredDocsForTable = docs.where((d) {
-      bool matchesStaff = selectedStaffFilter == "All Staff" || d['staffName'] == selectedStaffFilter;
-      bool matchesSearch = d['title'].toString().toLowerCase().contains(staffSearchQuery.toLowerCase());
+      final data = d.data() as Map<String, dynamic>;
+      bool matchesStaff = selectedStaffFilter == "All Staff" || data['staffName'] == selectedStaffFilter;
+      bool matchesSearch = data['title'].toString().toLowerCase().contains(staffSearchQuery.toLowerCase());
       return matchesStaff && matchesSearch;
     }).toList();
 
@@ -151,126 +274,66 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text("STAFF SUMMARY", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: sideBarColor)),
-            const SizedBox(height: 16),
-            Expanded(child: ListView(children: staffTotals.entries.map((e) => _buildStaffInfoCard(e.key, e.value, staffCounts[e.key]!)).toList())),
-          ])),
+          // Left Column: Staff Summary
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("STAFF SUMMARY", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ListView(
+                    children: staffTotals.entries.map((e) => _buildStaffInfoCard(e.key, e.value, staffCounts[e.key]!)).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(width: 24),
-          Expanded(flex: 5, child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)),
-            child: Column(children: [
-              Padding(padding: const EdgeInsets.all(16.0), child: Row(children: [
-                const Text("TRANSACTIONS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                const Spacer(),
-                _buildStaffDropdown(staffTotals.keys.toList()),
-                const SizedBox(width: 12),
-                _buildSearchField(),
-              ])),
-              const Divider(height: 1),
-              Expanded(child: _buildDataTable(filteredDocsForTable)),
-            ]),
-          )),
+          // Right Column: Detailed Transactions
+          Expanded(
+            flex: 5,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      children: [
+                        const Text("TRANSACTIONS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                        const Spacer(),
+                        _buildStaffDropdown(staffTotals.keys.toList()),
+                        const SizedBox(width: 12),
+                        _buildSearchField(),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  // Wrap table in Expanded + SingleChildScrollView to allow vertical scrolling
+                  // within the right-hand panel safely.
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: _buildDataTable(filteredDocsForTable),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
   // --- COMPONENTS ---
-  Widget _buildDataTable(List<DocumentSnapshot> docs) {
-    double totalSum = docs.fold(0, (sum, doc) => sum + (double.tryParse(doc['amount'].toString()) ?? 0));
-    if (docs.isEmpty) return const Center(child: Text("No records found", style: TextStyle(color: Colors.grey)));
 
-    return Column(children: [
-      Expanded(
-        child: SingleChildScrollView(
-          child: SizedBox(
-            width: double.infinity,
-            child: DataTable(
-              headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
-              columns: const [
-                DataColumn(label: Text("ENTRY DETAILS")), // Who & When
-                DataColumn(label: Text("STAFF")),         // For Whom
-                DataColumn(label: Text("CATEGORY")),      // KURI or COMPANY
-                DataColumn(label: Text("DESC")),          // Description
-                DataColumn(label: Text("AMOUNT")),
-                DataColumn(label: Text("ACTION")),
-              ],
-              rows: docs.map((d) {
-                final String type = d['type'] ?? 'COMPANY';
-                final String kuriName = d['kuriName'] ?? '';
-                final DateTime entryDate = (d['date'] as Timestamp).toDate();
-                final String addedBy = d['userName'] ?? 'Admin';
-
-                return DataRow(cells: [
-                  // 1. ENTRY DETAILS (Added By + Date/Time)
-                  DataCell(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("By: $addedBy", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          Text(DateFormat('dd MMM, hh:mm a').format(entryDate), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // 2. STAFF
-                  DataCell(Text(d['staffName'] ?? "-")),
-
-                  // 3. CATEGORY (Shows KURI + Name or COMPANY)
-                  DataCell(
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: type == 'KURI' ? Colors.orange.shade100 : Colors.blue.shade100,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            type,
-                            style: TextStyle(
-                              color: type == 'KURI' ? Colors.orange.shade900 : Colors.blue.shade900,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ),
-                        if (type == 'KURI' && kuriName.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(kuriName, style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                  // 4. DESCRIPTION
-                  DataCell(Text(d['title'].toString().toUpperCase(), overflow: TextOverflow.ellipsis)),
-
-                  // 5. AMOUNT
-                  DataCell(Text(currencyFormat.format(d['amount']), style: const TextStyle(fontWeight: FontWeight.bold))),
-
-                  // 6. ACTION
-                  DataCell(IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
-                    onPressed: () => _confirmDelete(d),
-                  )),
-                ]);
-              }).toList(),
-            ),
-          ),
-        ),
-      ),
-      _buildTableFooter(totalSum),
-    ]);
-  }
 
   Future<void> _generateReport({required bool isGrandTotal}) async {
     final pdf = pw.Document();
@@ -278,37 +341,52 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
         ? "GRAND TOTAL EXPENSE REPORT"
         : "EXPENSE REPORT - ${DateFormat('MMMM yyyy').format(selectedDate)}";
 
-    // Create a PDF-safe number format (Standard text instead of symbol)
     final pdfCurrency = NumberFormat.currency(locale: 'en_IN', symbol: 'Rs. ', decimalDigits: 2);
 
     // 1. Fetch Data
-    final snap = await FirebaseFirestore.instance.collection('expenses').orderBy('date', descending: true).get();
+    // Note: We don't orderBy 'date' here because new records use 'expenseDate'
+    // Sorting is handled better in memory if you have mixed field names
+    final snap = await FirebaseFirestore.instance.collection('expenses').get();
 
     var docs = snap.docs;
-    if (!isGrandTotal) {
-      docs = docs.where((doc) {
-        DateTime d = (doc['date'] as Timestamp).toDate();
-        return d.year == selectedDate.year && d.month == selectedDate.month;
-      }).toList();
-    }
 
-    // 2. Calculate Totals
+    // 2. Filter and Sort in memory to handle both old ('date') and new ('expenseDate') fields
+    List<QueryDocumentSnapshot> filteredDocs = docs.where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+
+      // Use the same safe date logic used in your UI
+      final DateTime d = data['expenseDate'] != null
+          ? (data['expenseDate'] as Timestamp).toDate()
+          : (data['date'] != null ? (data['date'] as Timestamp).toDate() : DateTime.now());
+
+      if (isGrandTotal) return true;
+      return d.year == selectedDate.year && d.month == selectedDate.month;
+    }).toList();
+
+    // Sort descending by date
+    filteredDocs.sort((a, b) {
+      final da = (a.data() as Map)['expenseDate'] ?? (a.data() as Map)['date'];
+      final db = (b.data() as Map)['expenseDate'] ?? (b.data() as Map)['date'];
+      return (db as Timestamp).compareTo(da as Timestamp);
+    });
+
+    // 3. Calculate Totals
     double total = 0;
     double kuriTotal = 0;
     double officeTotal = 0;
-    for (var d in docs) {
-      double amt = double.tryParse(d['amount'].toString()) ?? 0;
+    for (var d in filteredDocs) {
+      final data = d.data() as Map<String, dynamic>;
+      double amt = double.tryParse(data['amount'].toString()) ?? 0;
       total += amt;
-      if (d['type'] == 'KURI') kuriTotal += amt; else officeTotal += amt;
+      if (data['type'] == 'KURI') kuriTotal += amt; else officeTotal += amt;
     }
 
-    // 3. Create PDF Layout
+    // 4. Create PDF Layout (Design preserved)
     pdf.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape, // Landscape handles many columns better
+        pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) => [
-          // Header
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
@@ -330,19 +408,15 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
           ),
           pw.SizedBox(height: 20),
           pw.Divider(),
-
-          // Overview Summary
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               _pdfStatCard("Total Expense", pdfCurrency.format(total)),
-              _pdfStatCard("Kuri Schemes", pdfCurrency.format(kuriTotal)),
+              _pdfStatCard("Kuri Expense", pdfCurrency.format(kuriTotal)),
               _pdfStatCard("Office/Company", pdfCurrency.format(officeTotal)),
             ],
           ),
           pw.SizedBox(height: 20),
-
-          // Table
           pw.TableHelper.fromTextArray(
             headers: ['Date & Time', 'Added By', 'Staff', 'Category', 'Description', 'Amount'],
             headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white, fontSize: 10),
@@ -357,22 +431,31 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
               4: const pw.FlexColumnWidth(3),
               5: const pw.FlexColumnWidth(2),
             },
-            data: docs.map((d) {
-              final type = d['type'] ?? 'COMPANY';
-              final kuriName = d['kuriName'] ?? '';
-              double amt = double.tryParse(d['amount'].toString()) ?? 0;
+            data: filteredDocs.map((d) {
+              final data = d.data() as Map<String, dynamic>;
+              final type = data['type'] ?? 'COMPANY';
+              final kuriName = data['kuriName'] ?? '';
+              final double amt = double.tryParse(data['amount'].toString()) ?? 0;
+
+              // Safe Date Fetching
+              final DateTime dateVal = data['expenseDate'] != null
+                  ? (data['expenseDate'] as Timestamp).toDate()
+                  : (data['date'] != null ? (data['date'] as Timestamp).toDate() : DateTime.now());
+
+              // Get Added By from nested entryDetails map
+              final entry = data['entryDetails'] as Map<String, dynamic>?;
+              final String addedBy = entry?['addedByUserName'] ?? data['userName'] ?? 'Admin';
 
               return [
-                DateFormat('dd/MM/yy, hh:mm a').format((d['date'] as Timestamp).toDate()),
-                d['userName'] ?? 'Admin',
-                d['staffName'] ?? '-',
+                DateFormat('dd/MM/yy, hh:mm a').format(dateVal),
+                addedBy,
+                data['staffName'] ?? '-',
                 type == 'KURI' ? "KURI\n($kuriName)" : "OFFICE",
-                d['title'].toString().toUpperCase(),
-                pdfCurrency.format(amt), // Using safe currency format
+                data['title'].toString().toUpperCase(),
+                pdfCurrency.format(amt),
               ];
             }).toList(),
           ),
-
           pw.SizedBox(height: 20),
           pw.Align(
             alignment: pw.Alignment.centerRight,
@@ -386,8 +469,7 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
     );
 
     await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
-  }
-  // PDF Stat Card Helper
+  }  // PDF Stat Card Helper
   pw.Widget _pdfStatCard(String label, String value) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(10),
@@ -473,10 +555,63 @@ class _ExpenseManagerWebState extends State<ExpenseManagerWeb> with SingleTicker
 
 
   Widget _buildTabStrip() => Container(color: Colors.white, child: TabBar(controller: _tabController, labelColor: primaryBlue, indicatorColor: primaryBlue, tabs: const [Tab(text: "OVERVIEW"), Tab(text: "KURI"), Tab(text: "COMPANY"), Tab(text: "STAFF")]));
-  Widget _statCard(String t, double v, Color c, IconData i) => Expanded(child: Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)), child: Row(children: [Icon(i, color: c, size: 32), const SizedBox(width: 20), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)), Text(currencyFormat.format(v), style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c))])])));
-  Widget _buildStaffInfoCard(String n, double t, int c) => Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)), child: Row(children: [CircleAvatar(child: Text(n[0])), const SizedBox(width: 16), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(n, style: const TextStyle(fontWeight: FontWeight.bold)), Text("$c Entries")]), const Spacer(), Text(currencyFormat.format(t), style: const TextStyle(fontWeight: FontWeight.bold))]));
-  Widget _buildDateNavigator() => Row(children: [IconButton(icon: const Icon(Icons.chevron_left), onPressed: () => setState(() => selectedDate = DateTime(selectedDate.year, selectedDate.month - 1))), Text(DateFormat('dd MMM, hh:mm a').format(selectedDate)), IconButton(icon: const Icon(Icons.chevron_right), onPressed: () => setState(() => selectedDate = DateTime(selectedDate.year, selectedDate.month + 1)))]);
-  Widget _buildStaffDropdown(List<String> list) => DropdownButton<String>(value: selectedStaffFilter, items: ["All Staff", ...list].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (v) => setState(() => selectedStaffFilter = v!));
+  Widget _statCard(String t, double v, Color c, IconData i) => Container(
+    padding: const EdgeInsets.all(24),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: borderColor),
+    ),
+    child: Row(
+      children: [
+        Icon(i, color: c, size: 32),
+        const SizedBox(width: 20),
+        // Use Expanded here instead to ensure text doesn't overflow the card
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min, // Keep it compact
+            children: [
+              Text(t, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              FittedBox( // Prevents large numbers from breaking the layout
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  currencyFormat.format(v),
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );  Widget _buildStaffInfoCard(String n, double t, int c) => Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)), child: Row(children: [CircleAvatar(child: Text(n[0])), const SizedBox(width: 16), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(n, style: const TextStyle(fontWeight: FontWeight.bold)), Text("$c Entries")]), const Spacer(), Text(currencyFormat.format(t), style: const TextStyle(fontWeight: FontWeight.bold))]));
+  Widget _buildDateNavigator() {
+    return Row(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.chevron_left),
+          onPressed: () => setState(() {
+            // Subtract 1 month
+            selectedDate = DateTime(selectedDate.year, selectedDate.month - 1, 1);
+          }),
+        ),
+        // Changed format to 'MMMM yyyy' (e.g., March 2024)
+        Text(
+          DateFormat('MMMM yyyy').format(selectedDate),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        IconButton(
+          icon: const Icon(Icons.chevron_right),
+          onPressed: () => setState(() {
+            // Add 1 month
+            selectedDate = DateTime(selectedDate.year, selectedDate.month + 1, 1);
+          }),
+        ),
+      ],
+    );
+  }  Widget _buildStaffDropdown(List<String> list) => DropdownButton<String>(value: selectedStaffFilter, items: ["All Staff", ...list].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (v) => setState(() => selectedStaffFilter = v!));
   Widget _buildSearchField() => SizedBox(width: 200, height: 38, child: TextField(onChanged: (v) => setState(() => staffSearchQuery = v), decoration: const InputDecoration(hintText: "Search...", border: OutlineInputBorder())));
   Widget _buildSectionHeader(String t) => Text(t, style: const TextStyle(fontWeight: FontWeight.bold, color: sideBarColor));
 
@@ -506,93 +641,166 @@ class _AddExpenseDialogState extends State<AddExpenseDialog> {
     super.initState();
     _selectedStaff = widget.userName;
   }
+  // 1. Add this variable to your State class
+  DateTime _expenseDate = DateTime.now();
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(width: 450, padding: const EdgeInsets.all(32), child: Form(key: _formKey, child: SingleChildScrollView(child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text("NEW EXPENSE", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
-          const SizedBox(height: 24),
+      child: Container(
+          width: 450,
+          padding: const EdgeInsets.all(32),
+          child: Form(
+              key: _formKey,
+              child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("NEW EXPENSE", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
+                      const SizedBox(height: 24),
 
-          // STAFF FROM staff_admins
-          _label("Staff Member"),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance.collection('staff_admins').snapshots(),
-            builder: (context, snapshot) {
-              List<String> staff = snapshot.hasData ? snapshot.data!.docs.map((d) => d['name'].toString()).toList() : [widget.userName];
-              return DropdownButtonFormField<String>(
-                value: staff.contains(_selectedStaff) ? _selectedStaff : staff.first,
-                items: staff.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                onChanged: (v) => setState(() => _selectedStaff = v),
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-              );
-            },
-          ),
-          const SizedBox(height: 16),
+                      // EXPENSE DATE PICKER (Added Section)
+                      _label("Expense Date"),
+                      InkWell(
+                        onTap: () async {
+                          final DateTime? picked = await showDatePicker(
+                            context: context,
+                            initialDate: _expenseDate,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime.now(),
+                            builder: (context, child) => Localizations.override(
+                              context: context,
+                              locale: const Locale('en', 'GB'), // DD/MM/YYYY
+                              child: child!,
+                            ),
+                          );
+                          if (picked != null) setState(() => _expenseDate = picked);
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(border: OutlineInputBorder()),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(DateFormat('dd/MM/yyyy').format(_expenseDate)),
+                              const Icon(Icons.calendar_today, size: 18, color: Colors.blue),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
 
-          _label("Category"),
-          DropdownButtonFormField<String>(
-            value: _selectedType,
-            items: const [DropdownMenuItem(value: 'COMPANY', child: Text("Company")), DropdownMenuItem(value: 'KURI', child: Text("Kuri"))],
-            onChanged: (v) => setState(() { _selectedType = v!; _selectedKuri = null; }),
-            decoration: const InputDecoration(border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 16),
+                      _label("Staff Member"),
+                      StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance.collection('staff_admins').snapshots(),
+                        builder: (context, snapshot) {
+                          List<String> staff = snapshot.hasData
+                              ? snapshot.data!.docs.map((d) => d['name'].toString()).toList()
+                              : [widget.userName];
+                          return DropdownButtonFormField<String>(
+                            value: staff.contains(_selectedStaff) ? _selectedStaff : staff.first,
+                            items: staff.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                            onChanged: (v) => setState(() => _selectedStaff = v),
+                            decoration: const InputDecoration(border: OutlineInputBorder()),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
 
-          // KURIs FROM kuris collection
-          if (_selectedType == 'KURI') ...[
-            _label("Select Kuri Scheme"),
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('kuris').snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const LinearProgressIndicator();
-                List<String> schemes = snapshot.data!.docs.map((d) => d['name'].toString()).toList();
-                return DropdownButtonFormField<String>(
-                  value: _selectedKuri,
-                  hint: const Text("Choose Scheme"),
-                  items: schemes.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                  onChanged: (v) => setState(() => _selectedKuri = v),
-                  validator: (v) => _selectedType == 'KURI' && v == null ? "Required" : null,
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+                      _label("Category"),
+                      DropdownButtonFormField<String>(
+                        value: _selectedType,
+                        items: const [
+                          DropdownMenuItem(value: 'COMPANY', child: Text("Company")),
+                          DropdownMenuItem(value: 'KURI', child: Text("Kuri"))
+                        ],
+                        onChanged: (v) => setState(() { _selectedType = v!; _selectedKuri = null; }),
+                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 16),
 
-          _label("Description"),
-          TextFormField(controller: _titleCtrl, decoration: const InputDecoration(border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? "Required" : null),
-          const SizedBox(height: 16),
-          _label("Amount (₹)"),
-          TextFormField(controller: _amtCtrl, decoration: const InputDecoration(border: OutlineInputBorder()), keyboardType: TextInputType.number, validator: (v) => (double.tryParse(v ?? "") ?? 0) <= 0 ? "Invalid" : null),
+                      if (_selectedType == 'KURI') ...[
+                        _label("Select Kuri Scheme"),
+                        StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance.collection('kuris').snapshots(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) return const LinearProgressIndicator();
+                            List<String> schemes = snapshot.data!.docs.map((d) => d['name'].toString()).toList();
+                            return DropdownButtonFormField<String>(
+                              value: _selectedKuri,
+                              hint: const Text("Choose Scheme"),
+                              items: schemes.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                              onChanged: (v) => setState(() => _selectedKuri = v),
+                              validator: (v) => _selectedType == 'KURI' && v == null ? "Required" : null,
+                              decoration: const InputDecoration(border: OutlineInputBorder()),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                      ],
 
-          const SizedBox(height: 32),
-          SizedBox(width: double.infinity, height: 50, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E40AF), foregroundColor: Colors.white), onPressed: _submit, child: const Text("SAVE"))),
-        ],
-      )))),
+                      _label("Description"),
+                      TextFormField(
+                          controller: _titleCtrl,
+                          decoration: const InputDecoration(border: OutlineInputBorder()),
+                          validator: (v) => v!.isEmpty ? "Required" : null
+                      ),
+                      const SizedBox(height: 16),
+
+                      _label("Amount (₹)"),
+                      TextFormField(
+                          controller: _amtCtrl,
+                          decoration: const InputDecoration(border: OutlineInputBorder()),
+                          keyboardType: TextInputType.number,
+                          validator: (v) => (double.tryParse(v ?? "") ?? 0) <= 0 ? "Invalid" : null
+                      ),
+
+                      const SizedBox(height: 32),
+                      SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF1E40AF),
+                                  foregroundColor: Colors.white
+                              ),
+                              onPressed: _submit,
+                              child: const Text("SAVE")
+                          )
+                      ),
+                    ],
+                  )
+              )
+          )
+      ),
     );
   }
-
-  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(t, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)));
 
   void _submit() async {
     if (_formKey.currentState!.validate()) {
       await FirebaseFirestore.instance.collection('expenses').add({
+        // 1. Actual Expense Data
+        'expenseDate': Timestamp.fromDate(_expenseDate),
         'title': _titleCtrl.text.trim(),
         'amount': double.parse(_amtCtrl.text),
         'type': _selectedType,
         'staffName': _selectedStaff,
-        'date': Timestamp.now(),
         'kuriName': _selectedType == 'KURI' ? _selectedKuri : 'OFFICE',
-        'userId': widget.userId,
-        'userName': widget.userName,
-        'userRole': widget.userRole,
+
+        // 2. Separate Entry Metadata (Entry Details)
+        'entryDetails': {
+          'addedAt': FieldValue.serverTimestamp(),
+          'addedByUserId': widget.userId,
+          'addedByUserName': widget.userName,
+          'addedByUserRole': widget.userRole,
+        }
       });
       Navigator.pop(context);
     }
   }
+
+  Widget _label(String t) => Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(t, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.grey)));
+
+
 }
