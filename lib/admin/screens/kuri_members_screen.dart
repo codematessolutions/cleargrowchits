@@ -652,13 +652,13 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
                                     DataCell(Row(
                                       children: [
-                                        if (!hasWon && !isPaid) ...[
+
                                           _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
                                           IconButton(
                                             icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
                                             onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
                                           ),
-                                        ],
+
 
                                         if (widget.userRole == 'Super Admin') ...[
                                           IconButton(
@@ -769,24 +769,55 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
   // --- UPDATED WINNER ACTION ---
 
   void _sendWhatsAppReminder(String phone, String name, double balance) async {
-    // Clean the phone number (remove spaces, plus signs, etc.)
-    String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    // 1. Prepare default message
+    String defaultMessage = "Hi $name, \nThank you!";
 
-    // Add country code if not present (assuming +91 for India)
-    if (!cleanPhone.startsWith('91')) cleanPhone = '91$cleanPhone';
+    // 2. Setup controller for the dialog
+    TextEditingController messageController = TextEditingController(text: defaultMessage);
 
-    String message = "Hi $name, this is a reminder regarding your Kuri payment. "
-        "Your pending balance for ${DateFormat('MMMM yyyy').format(selectedMonth)} is ₹${balance.toInt()}. "
-        "Please make the payment to stay eligible for the draw. Thank you!";
+    // 3. Show Edit Dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Edit Reminder Message"),
+        content: TextField(
+          controller: messageController,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            hintText: "Enter message...",
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("CANCEL"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+            onPressed: () async {
+              String finalMessage = messageController.text;
+              Navigator.pop(context); // Close dialog
 
-    // Encode the URL for the web
-    String url = "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(message)}";
+              // --- Launch Logic ---
+              String cleanPhone = phone.replaceAll(RegExp(r'[^0-9]'), '');
+              if (!cleanPhone.startsWith('91')) cleanPhone = '91$cleanPhone';
 
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } else {
-      debugPrint("Could not launch WhatsApp");
-    }
+              String url = "https://wa.me/$cleanPhone?text=${Uri.encodeComponent(finalMessage)}";
+
+              if (await canLaunchUrl(Uri.parse(url))) {
+                await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Could not launch WhatsApp")),
+                );
+              }
+            },
+            child: const Text("SEND TO WHATSAPP"),
+          ),
+        ],
+      ),
+    );
   }
   void _markAsWinner(String mid, String name, bool isPaid, Map<String, dynamic>? pMonth) async {
     // 1. Initial Validation
