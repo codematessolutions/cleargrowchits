@@ -309,7 +309,7 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
               children: [
                 Text(uiFormat.format(total), style: const TextStyle(fontWeight: FontWeight.bold, color: accentBlue, fontSize: 12)),
                 const SizedBox(width: 8),
-                Text("(${uiFormat.format(e.value['cash'])}C / ${uiFormat.format(e.value['gpay'])}G)",
+                Text("(${uiFormat.format(e.value['cash'])}:C / ${uiFormat.format(e.value['gpay'])}:G)",
                     style: const TextStyle(fontSize: 10, color: textMuted)),
               ],
             )),
