@@ -165,9 +165,6 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
             ),
           ),
           const Spacer(),
-          // TextButton.icon(onPressed: () {}, icon: const Icon(Icons.filter_list), label: const Text("Advanced Filter")),
-          const SizedBox(width: 10),
-          // IconButton(onPressed: () => setState(() {}), icon: const Icon(Icons.refresh)),
         ],
       ),
     );
@@ -180,6 +177,7 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
+        // Apply Search Filtering
         var docs = snapshot.data!.docs.where((doc) {
           var name = (doc['name'] ?? "").toString().toLowerCase();
           var phone = (doc['phone'] ?? "").toString();
@@ -194,6 +192,8 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
               dataRowMaxHeight: 50,
               headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
               columns: [
+                // UPDATED: Added SI Column
+                const DataColumn(label: Text("SL", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                 const DataColumn(label: Text("MEMBER NAME", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                 const DataColumn(label: Text("PHONE", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                 const DataColumn(label: Text("PLACE", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
@@ -201,10 +201,16 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
                 const DataColumn(label: Text("CREATED ON", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
                 const DataColumn(label: Text("ACTIONS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12))),
               ],
-              rows: docs.map((doc) {
+              // UPDATED: Mapping using asMap().entries to get the loop index
+              rows: docs.asMap().entries.map((entry) {
+                int index = entry.key; // The row index (0, 1, 2...)
+                var doc = entry.value; // The Firestore document
                 var data = doc.data() as Map<String, dynamic>;
+
                 return DataRow(
                   cells: [
+                    // SI NO CELL
+                    DataCell(Text("${index + 1}", style: const TextStyle(color: Colors.grey, fontSize: 12))),
                     DataCell(Text(data['name'].toString().toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))),
                     DataCell(Text(data['phone'] ?? "-")),
                     DataCell(Text(data['place'] ?? "-")),
