@@ -34,16 +34,34 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
     Query paymentQuery = FirebaseFirestore.instance.collection('payments');
     Query expenseQuery = FirebaseFirestore.instance.collection('expenses');
 
+    // Define the Start and End of the selected range
+    DateTime start;
+    DateTime end;
+
     if (viewMode == 0) {
-      DateTime start = DateTime(selectedDate.year, selectedDate.month, 1);
-      DateTime end = DateTime(selectedDate.year, selectedDate.month + 1, 1).subtract(const Duration(seconds: 1));
-      paymentQuery = paymentQuery.where('paidDate', isGreaterThanOrEqualTo: start).where('paidDate', isLessThanOrEqualTo: end);
-      expenseQuery = expenseQuery.where('date', isGreaterThanOrEqualTo: start).where('date', isLessThanOrEqualTo: end);
+      // Month View
+      start = DateTime(selectedDate.year, selectedDate.month, 1);
+      end = DateTime(selectedDate.year, selectedDate.month + 1, 1).subtract(const Duration(milliseconds: 1));
     } else if (viewMode == 1) {
-      DateTime start = DateTime(selectedDate.year, 1, 1);
-      DateTime end = DateTime(selectedDate.year, 12, 31, 23, 59, 59);
-      paymentQuery = paymentQuery.where('paidDate', isGreaterThanOrEqualTo: start).where('paidDate', isLessThanOrEqualTo: end);
-      expenseQuery = expenseQuery.where('date', isGreaterThanOrEqualTo: start).where('date', isLessThanOrEqualTo: end);
+      // Year View
+      start = DateTime(selectedDate.year, 1, 1);
+      end = DateTime(selectedDate.year, 12, 31, 23, 59, 59);
+    } else {
+      // Total View: Return all data without filtering
+      start = DateTime(2000); // Far past
+      end = DateTime(2100);   // Far future
+    }
+
+    // Apply filters ONLY if not in "Total" mode (viewMode 2)
+    if (viewMode != 2) {
+      paymentQuery = paymentQuery
+          .where('paidDate', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+          .where('paidDate', isLessThanOrEqualTo: Timestamp.fromDate(end));
+
+      // CRITICAL: Changed 'date' to 'expenseDate' to match your DB screenshot
+      expenseQuery = expenseQuery
+          .where('expenseDate', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+          .where('expenseDate', isLessThanOrEqualTo: Timestamp.fromDate(end));
     }
 
     Stream<QuerySnapshot> staffStream = FirebaseFirestore.instance.collection('staff_admins').snapshots();
@@ -63,7 +81,6 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
       };
     });
   }
-
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
@@ -130,11 +147,35 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
                     }
                   }
 
+                  // ... inside StreamBuilder ...
+
+// 1. Process Expenses correctly across all maps
                   for (var doc in expenses) {
                     final data = doc.data() as Map<String, dynamic>;
                     String staffName = data['staffName'] ?? "";
+                    String kId = data['kuriId'] ?? "";
+                    String kName = data['kuriName'] ?? "OFFICE"; // Using the name stored in the expense doc
                     double amt = double.tryParse(data['amount'].toString()) ?? 0.0;
-                    staffAudit.forEach((id, val) { if (val['name'] == staffName) val['exp'] += amt; });
+
+                    // Update Global Staff Audit (By Name)
+                    for (var val in staffAudit.values) {
+                      if (val['name'] == staffName) {
+                        val['exp'] = (val['exp'] ?? 0.0) + amt;
+                      }
+                    }
+
+                    // Update Kuri Audit (By ID)
+                    if (kuriAudit.containsKey(kId)) {
+                      kuriAudit[kId]!['exp'] = (kuriAudit[kId]!['exp'] ?? 0.0) + amt;
+                    }
+
+                    // Update Kuri-Staff Breakdown
+                    if (kuriStaffBreakdown.containsKey(kName)) {
+                      var breakdown = kuriStaffBreakdown[kName]!;
+                      // Ensure the staff entry exists in this specific Kuri's map
+                      breakdown.putIfAbsent(staffName, () => {"cash": 0.0, "gpay": 0.0, "exp": 0.0});
+                      breakdown[staffName]!["exp"] = (breakdown[staffName]!["exp"] ?? 0.0) + amt;
+                    }
                   }
 
                   return _buildContent(staffAudit, kuriAudit, kuriStaffBreakdown);
@@ -247,8 +288,11 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
 
   Widget _buildTableCard(Map<String, Map<String, dynamic>> data, String label) {
     double grandCash = 0; double grandGPay = 0; double grandExp = 0;
-    data.forEach((_, val) { grandCash += val['cash']; grandGPay += val['gpay']; grandExp += val['exp']; });
-
+    data.forEach((_, val) {
+      grandCash += val['cash'] ?? 0.0;
+      grandGPay += val['gpay'] ?? 0.0;
+      grandExp += val['exp'] ?? 0.0;
+    });
     List<DataRow> rows = data.entries.map((e) {
       double total = e.value['cash'] + e.value['gpay'];
       double balance = total - e.value['exp'];
@@ -346,9 +390,6 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
 
 
 
-  Widget _miniCircle(Color color) {
-    return Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
-  }
 
   Widget _buildKuriStaffBreakdown(Map<String, Map<String, Map<String, double>>> data) {
     if (data.isEmpty) return _buildEmptyState();
@@ -356,21 +397,62 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
       int crossAxisCount = constraints.maxWidth > 1400 ? 3 : (constraints.maxWidth > 900 ? 2 : 1);
       return GridView.builder(
         padding: const EdgeInsets.all(24),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: crossAxisCount, crossAxisSpacing: 24, mainAxisSpacing: 24, mainAxisExtent: 480),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 24,
+            mainAxisSpacing: 24,
+            mainAxisExtent: 520
+        ),
         itemCount: data.length,
         itemBuilder: (context, index) {
           String kuriName = data.keys.elementAt(index);
           var staffData = data[kuriName]!;
-          double totalCash = 0; double totalGpay = 0;
-          staffData.forEach((_, val) { totalCash += val['cash']!; totalGpay += val['gpay']!; });
-          var activeStaff = staffData.entries.where((e) => (e.value['cash']! + e.value['gpay']!) > 0).toList();
+
+          double totalCash = 0; double totalGpay = 0; double totalExp = 0;
+          staffData.forEach((_, val) {
+            // Use ?? 0 to prevent null errors
+            totalCash += val['cash'] ?? 0.0;
+            totalGpay += val['gpay'] ?? 0.0;
+            totalExp += val['exp'] ?? 0.0;
+          });
+
+          // Safe filtering for active staff
+          var activeStaff = staffData.entries.where((e) {
+            double c = e.value['cash'] ?? 0.0;
+            double g = e.value['gpay'] ?? 0.0;
+            double ex = e.value['exp'] ?? 0.0;
+            return (c + g + ex) > 0;
+          }).toList();
+
           return Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderCol), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 2))]),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: borderCol),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 2))]
+            ),
             child: Column(
               children: [
-                _buildKuriCardHeader(kuriName, totalCash + totalGpay, totalCash, totalGpay),
+                _buildKuriCardHeader(kuriName, (totalCash + totalGpay) - totalExp, totalCash, totalGpay, totalExp),
                 _buildBreakdownTableSubHeader(),
-                Expanded(child: activeStaff.isEmpty ? const Center(child: Text("No Data", style: TextStyle(color: textMuted))) : ListView.separated(itemCount: activeStaff.length, separatorBuilder: (context, i) => const Divider(height: 1, color: borderCol), itemBuilder: (context, i) => _buildStaffRow(i + 1, activeStaff[i].key, activeStaff[i].value['cash']!, activeStaff[i].value['gpay']!))),
+                Expanded(
+                    child: activeStaff.isEmpty
+                        ? const Center(child: Text("No Data", style: TextStyle(color: textMuted)))
+                        : ListView.separated(
+                        itemCount: activeStaff.length,
+                        separatorBuilder: (context, i) => const Divider(height: 1, color: borderCol),
+                        itemBuilder: (context, i) {
+                          var values = activeStaff[i].value;
+                          return _buildStaffRow(
+                              i + 1,
+                              activeStaff[i].key,
+                              values['cash'] ?? 0.0,
+                              values['gpay'] ?? 0.0,
+                              values['exp'] ?? 0.0
+                          );
+                        }
+                    )
+                ),
                 _buildKuriCardFooter(activeStaff.length),
               ],
             ),
@@ -379,16 +461,29 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
       );
     });
   }
-
-  Widget _buildKuriCardHeader(String name, double total, double cash, double gpay) {
+  Widget _buildKuriCardHeader(String name, double net, double cash, double gpay, double exp) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(color: accentBlue.withOpacity(0.04), borderRadius: const BorderRadius.vertical(top: Radius.circular(12))),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
         children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: textMain, letterSpacing: 0.5), overflow: TextOverflow.ellipsis), const SizedBox(height: 4), Row(children: [_miniTag("Cash: ${uiFormat.format(cash)}", Colors.green), const SizedBox(width: 8), _miniTag("GPay: ${uiFormat.format(gpay)}", accentBlue)])])),
-          Text(uiFormat.format(total), style: const TextStyle(fontWeight: FontWeight.w900, color: accentBlue, fontSize: 18)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: Text(name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: textMain, letterSpacing: 0.5), overflow: TextOverflow.ellipsis)),
+              Text(uiFormat.format(net), style: const TextStyle(fontWeight: FontWeight.w900, color: accentBlue, fontSize: 18)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _miniTag("C: ${uiFormat.format(cash)}", Colors.green),
+              const SizedBox(width: 6),
+              _miniTag("G: ${uiFormat.format(gpay)}", accentBlue),
+              const SizedBox(width: 6),
+              _miniTag("E: ${uiFormat.format(exp)}", Colors.red.shade400),
+            ],
+          )
         ],
       ),
     );
@@ -399,27 +494,33 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       color: webBg,
       child: const Row(children: [
-        SizedBox(width: 30, child: Text("SI", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
+        SizedBox(width: 25, child: Text("SI", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
         Expanded(flex: 3, child: Text("COLLECTOR", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
         Expanded(flex: 2, child: Text("CASH", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
         Expanded(flex: 2, child: Text("GPAY", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
-        Expanded(flex: 2, child: Text("TOTAL", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
+        Expanded(flex: 2, child: Text("EXP", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
+        Expanded(flex: 2, child: Text("NET", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10, color: textMuted))),
       ]),
     );
   }
 
-  Widget _buildStaffRow(int si, String name, double cash, double gpay) {
+  Widget _buildStaffRow(int si, String name, double cash, double gpay, double exp) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(children: [
-        SizedBox(width: 30, child: Text("$si", style: const TextStyle(color: textMuted, fontSize: 12))),
-        Expanded(flex: 3, child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: textMain))),
-        Expanded(flex: 2, child: Text(uiFormat.format(cash), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.green))),
-        Expanded(flex: 2, child: Text(uiFormat.format(gpay), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: accentBlue))),
-        Expanded(flex: 2, child: Text(uiFormat.format(cash + gpay), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: textMain))),
+        SizedBox(width: 25, child: Text("$si", style: const TextStyle(color: textMuted, fontSize: 11))),
+        Expanded(flex: 3, child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: textMain))),
+        Expanded(flex: 2, child: Text(uiFormat.format(cash), textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: Colors.green))),
+        Expanded(flex: 2, child: Text(uiFormat.format(gpay), textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: accentBlue))),
+        Expanded(flex: 2, child: Text(uiFormat.format(exp), textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: Colors.red.shade400))),
+        Expanded(flex: 2, child: Text(uiFormat.format(cash + gpay - exp), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: textMain))),
       ]),
     );
   }
+
+
+
+
 
   Widget _miniTag(String label, Color color) {
     return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Text(label, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold)));
@@ -446,7 +547,15 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
   }
 
   void _adjustDate(int offset) {
-    setState(() { selectedDate = viewMode == 1 ? DateTime(selectedDate.year + offset, 1) : DateTime(selectedDate.year, selectedDate.month + offset); });
+    setState(() {
+      if (viewMode == 1) {
+        // Year Mode: Add/Subtract 1 year
+        selectedDate = DateTime(selectedDate.year + offset, selectedDate.month);
+      } else {
+        // Month Mode: Add/Subtract 1 month
+        selectedDate = DateTime(selectedDate.year, selectedDate.month + offset);
+      }
+    });
   }
 
   Widget _buildExportAction(Map staffData, Map kuriData, Map breakdownData) {
@@ -595,50 +704,72 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
     List<pw.Widget> rows = [];
 
     data.forEach((kuriName, staffMap) {
-      double kuriTotal = 0;
-      staffMap.forEach((_, val) => kuriTotal += (val['cash']! + val['gpay']!));
+      // Calculate total for this specific Kuri to see if it should be printed
+      double kuriNet = 0;
+      staffMap.forEach((_, val) => kuriNet += (val['cash']! + val['gpay']! - (val['exp'] ?? 0)));
 
-      if (kuriTotal > 0) {
+      // Only add the table if there is financial activity
+      if (kuriNet != 0 || staffMap.isNotEmpty) {
+
+        // --- THE HEADER WIDGET ---
         rows.add(
-            pw.Container(
-              width: double.infinity,
-              padding: const pw.EdgeInsets.all(6),
-              decoration: const pw.BoxDecoration(color: PdfColors.grey200),
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text(kuriName.toUpperCase(), style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9)),
-                  pw.Text("Total: ${pdfFormat.format(kuriTotal)}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9)),
-                ],
-              ),
-            )
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: const pw.BoxDecoration(
+              color: PdfColors.grey200, // Light grey background for the Kuri name
+              border: pw.Border(left: pw.BorderSide(color: PdfColors.blue900, width: 3)), // Blue accent line
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  kuriName.toUpperCase(),
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: PdfColors.blueGrey900),
+                ),
+                pw.Text(
+                  "NET: ${pdfFormat.format(kuriNet)}",
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
         );
 
+        // --- THE DATA TABLE ---
         rows.add(pw.TableHelper.fromTextArray(
           cellStyle: const pw.TextStyle(fontSize: 8),
-          cellHeight: 18,
-          headerStyle: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold),
-          cellAlignment: pw.Alignment.centerRight,
-          cellAlignments: {0: pw.Alignment.centerLeft},
+          headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+          headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey700),
 
-          // CORRECT PARAMETER NAME IS 'border'
+          // Correcting the border parameter name for fromTextArray
           border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
 
-          headers: ['Collector', 'Cash', 'GPay', 'Total'],
-          data: staffMap.entries.where((s) => (s.value['cash']! + s.value['gpay']!) > 0).map((s) => [
-            s.key,
-            pdfFormat.format(s.value['cash']),
-            pdfFormat.format(s.value['gpay']),
-            pdfFormat.format(s.value['cash']! + s.value['gpay']!),
-          ]).toList(),
+          cellAlignment: pw.Alignment.centerRight,
+          cellAlignments: {0: pw.Alignment.centerLeft}, // Align names to the left
+
+          headers: ['Collector', 'Cash', 'GPay', 'Exp', 'Net Total'],
+          data: staffMap.entries
+              .where((s) => (s.value['cash']! + s.value['gpay']! + (s.value['exp'] ?? 0)) > 0)
+              .map((s) {
+            double total = (s.value['cash']! + s.value['gpay']!) - (s.value['exp'] ?? 0);
+            return [
+              s.key.toUpperCase(),
+              pdfFormat.format(s.value['cash']),
+              pdfFormat.format(s.value['gpay']),
+              pdfFormat.format(s.value['exp'] ?? 0),
+              pdfFormat.format(total),
+            ];
+          }).toList(),
         ));
-        rows.add(pw.SizedBox(height: 15));
+
+        // Spacing before the next Kuri section
+        rows.add(pw.SizedBox(height: 20));
       }
     });
 
     return pw.Column(children: rows);
-  }
-// Table for the complex Staff-Kuri Breakdown
+  }  // Table for the complex Staff-Kuri Breakdown
 
   pw.Widget _pdfSummaryTile(String label, String value, {bool isHighlight = false}) {
     return pw.Container(

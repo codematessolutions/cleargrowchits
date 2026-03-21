@@ -632,6 +632,8 @@ class _AddExpenseDialogState extends State<AddExpenseDialog> {
   final _titleCtrl = TextEditingController();
   final _amtCtrl = TextEditingController();
 
+  String? _selectedKuriId;   // To store the Firestore Document ID
+  String? _selectedKuriName; // To store the Display Name
   String _selectedType = 'COMPANY';
   String? _selectedStaff;
   String? _selectedKuri;
@@ -726,12 +728,28 @@ class _AddExpenseDialogState extends State<AddExpenseDialog> {
                           stream: FirebaseFirestore.instance.collection('kuris').snapshots(),
                           builder: (context, snapshot) {
                             if (!snapshot.hasData) return const LinearProgressIndicator();
-                            List<String> schemes = snapshot.data!.docs.map((d) => d['name'].toString()).toList();
+
                             return DropdownButtonFormField<String>(
-                              value: _selectedKuri,
+                              // Use _selectedKuriId here
+                              value: _selectedKuriId,
                               hint: const Text("Choose Scheme"),
-                              items: schemes.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                              onChanged: (v) => setState(() => _selectedKuri = v),
+                              items: snapshot.data!.docs.map((doc) {
+                                final data = doc.data() as Map<String, dynamic>;
+                                return DropdownMenuItem<String>(
+                                  value: doc.id,
+                                  child: Text(data['name'] ?? "Unnamed Kuri"),
+                                );
+                              }).toList(),
+                              onChanged: (id) {
+                                // FIND the specific document to get the name
+                                final selectedDoc = snapshot.data!.docs.firstWhere((d) => d.id == id);
+                                final data = selectedDoc.data() as Map<String, dynamic>;
+
+                                setState(() {
+                                  _selectedKuriId = id; // Update the ID
+                                  _selectedKuriName = data['name']; // Update the Name
+                                });
+                              },
                               validator: (v) => _selectedType == 'KURI' && v == null ? "Required" : null,
                               decoration: const InputDecoration(border: OutlineInputBorder()),
                             );
@@ -780,20 +798,20 @@ class _AddExpenseDialogState extends State<AddExpenseDialog> {
   void _submit() async {
     if (_formKey.currentState!.validate()) {
       await FirebaseFirestore.instance.collection('expenses').add({
-        // 1. Actual Expense Data
         'expenseDate': Timestamp.fromDate(_expenseDate),
         'title': _titleCtrl.text.trim(),
-        'amount': double.parse(_amtCtrl.text),
+        'amount': double.tryParse(_amtCtrl.text) ?? 0.0,
         'type': _selectedType,
         'staffName': _selectedStaff,
-        'kuriName': _selectedType == 'KURI' ? _selectedKuri : 'OFFICE',
 
-        // 2. Separate Entry Metadata (Entry Details)
+        // Use the variables updated in onChanged
+        'kuriId': _selectedType == 'KURI' ? _selectedKuriId : 'OFFICE',
+        'kuriName': _selectedType == 'KURI' ? _selectedKuriName : 'OFFICE',
+
         'entryDetails': {
           'addedAt': FieldValue.serverTimestamp(),
           'addedByUserId': widget.userId,
           'addedByUserName': widget.userName,
-          'addedByUserRole': widget.userRole,
         }
       });
       Navigator.pop(context);
