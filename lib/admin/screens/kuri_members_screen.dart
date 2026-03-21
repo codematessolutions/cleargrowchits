@@ -1050,7 +1050,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 .delete();
 
             if (mounted) {
-              _fetchMembers(isInitial: true); // Refresh list
+              // _fetchMembers(isInitial: true); // Refresh list
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                   content: Text("Payment Record Deleted"),
                   backgroundColor: Colors.orange
@@ -1107,7 +1107,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             }
 
             if (mounted) {
-              _fetchMembers(isInitial: true);
+              // _fetchMembers(isInitial: true);
               Navigator.pop(c);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                   content: Text("Payment Updated Successfully"),
