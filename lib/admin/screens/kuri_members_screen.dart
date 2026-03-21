@@ -1016,13 +1016,11 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     // 1. Fetch admins and create a List of Maps for the dialog
     final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
 
-    // adminData will be: [{'id': '...', 'name': '...'}, ...]
     List<Map<String, String>> adminData = adminSnap.docs.map((doc) => {
       'id': doc.id,
       'name': doc['name'].toString(),
     }).toList();
 
-    // Mapping for quick lookup during the Firestore save process
     Map<String, String> adminIdToNameMap = {for (var doc in adminSnap.docs) doc.id: doc['name'].toString()};
 
     if (!mounted) return;
@@ -1033,19 +1031,44 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       builder: (c) => MarkPaymentDialog(
         memberName: name,
         fullAmount: monthlyAmount,
-        adminList: adminData, // PASSING THE LIST OF MAPS
-        initialSplits: existingPayment?['paymentSplits'],
+        adminList: adminData,
+
+        // FIXED: Added explicit casting to prevent 'JSArray' TypeError
+        initialSplits: existingPayment?['paymentSplits'] != null
+            ? (existingPayment!['paymentSplits'] as List)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+            : null,
+
+        // NEW FEATURE: Handle deleting the entire record
+        onDelete: existingPayment != null && existingPayment.containsKey('id')
+            ? () async {
+          try {
+            await FirebaseFirestore.instance
+                .collection('payments')
+                .doc(existingPayment['id'])
+                .delete();
+
+            if (mounted) {
+              _fetchMembers(isInitial: true); // Refresh list
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text("Payment Record Deleted"),
+                  backgroundColor: Colors.orange
+              ));
+            }
+          } catch (e) {
+            debugPrint("Delete Error: $e");
+          }
+        }
+            : null,
+
         onConfirm: (splits, firstSplitDate) async {
           try {
-            // 1. Calculate the real-time total from all rows (Old + New)
             double totalCollected = splits.fold(0.0, (sum, s) => sum + (s['amount'] as double));
             String splitAmountsStr = splits.map((s) => s['amount'].toString()).join(", ");
 
-            // 2. Status flipping logic
             String paymentStatus = (totalCollected >= monthlyAmount) ? "Fully Paid" : "Partial";
 
-            // 3. Multi-Collector Mapping: Get unique names for the summary column
-            // Using .toSet() ensures if same person collects twice, they appear once.
             String allCollectors = splits
                 .map((s) => adminIdToNameMap[s['collectorId']] ?? "Unknown")
                 .toSet()
@@ -1061,7 +1084,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               'status': paymentStatus,
               'splitAmounts': splitAmountsStr,
               'mode': splits.map((s) => s['mode'].toString()).join(", "),
-              'collectedBy': allCollectors, // Updated to show all unique collectors
+              'collectedBy': allCollectors,
               'paymentSplits': splits.map((s) => {
                 'collectorId': s['collectorId'],
                 'collectorName': adminIdToNameMap[s['collectorId']] ?? "Unknown",
@@ -1075,10 +1098,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             };
 
             if (existingPayment != null && existingPayment.containsKey('id')) {
-              // Update the existing partial document with new total and new splits
               await FirebaseFirestore.instance.collection('payments').doc(existingPayment['id']).update(data);
             } else {
-              // Standard new payment creation
               data['paidAt'] = FieldValue.serverTimestamp();
               data['addedById'] = widget.userId;
               data['addedByName'] = widget.userName;
@@ -1103,7 +1124,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       ),
     );
   }
-
 
   Future<void> migrateOldPayments() async {
     final db = FirebaseFirestore.instance;

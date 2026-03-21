@@ -479,20 +479,26 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
     );
   }
 }
+
+
 class MarkPaymentDialog extends StatefulWidget {
   final String memberName;
   final double fullAmount;
-  final List<Map<String, String>> adminList; // Changed to List of Maps
-  final List<dynamic>? initialSplits;
-  final Function(List<Map<String, dynamic>> splits, DateTime date) onConfirm;
+  final List<Map<String, dynamic>>? initialSplits;
+  final List<Map<String, String>> adminList;
+  final Function(List<Map<String, dynamic>>, DateTime) onConfirm;
+
+  // NEW FEATURE: Callback to delete the entire payment record
+  final Future<void> Function()? onDelete;
 
   const MarkPaymentDialog({
     super.key,
     required this.memberName,
     required this.fullAmount,
     required this.adminList,
-    this.initialSplits,
     required this.onConfirm,
+    this.initialSplits,
+    this.onDelete,
   });
 
   @override
@@ -533,20 +539,45 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
   @override
   void dispose() {
-    for (var controller in _amountControllers) { controller.dispose(); }
+    for (var controller in _amountControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
   double get totalEntered => splits.fold(0.0, (sum, item) => sum + (item['amount'] as double));
 
+  // --- NEW: CONFIRMATION & DELETE LOGIC ---
+  void _confirmGrandDelete() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Delete This Payment?"),
+        content: const Text("This will permanently remove all splits for this payment. This action cannot be undone."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx); // Close alert
+              setState(() => _isSaving = true);
+              if (widget.onDelete != null) {
+                await widget.onDelete!();
+              }
+              if (mounted) Navigator.pop(context); // Close main dialog
+            },
+            child: const Text("DELETE EVERYTHING"),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Logic for validation
     bool isFullyPaid = totalEntered >= widget.fullAmount;
     bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
     bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
-
-    // Allows confirm if it's either partial or full
     bool isComplete = (isFullyPaid || isPartial) && areFieldsFilled && !_isSaving;
 
     return Dialog(
@@ -557,7 +588,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildHeader(), // Now shows Balance
+            _buildHeader(),
             Padding(
               padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
               child: Row(
@@ -584,7 +615,6 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   }
 
   Widget _buildHeader() {
-    // Logic to show remaining balance in the header
     double remaining = widget.fullAmount - totalEntered;
     bool overPaid = totalEntered > widget.fullAmount;
 
@@ -598,14 +628,8 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(widget.memberName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             Text(
-                remaining > 0
-                    ? "Pending Balance: ₹${remaining.toInt()}"
-                    : (overPaid ? "Overpaid Amount" : "Payment Fully Settled"),
-                style: TextStyle(
-                    fontSize: 12,
-                    color: remaining > 0 ? Colors.red : Colors.green,
-                    fontWeight: FontWeight.bold
-                )
+                remaining > 0 ? "Pending Balance: ₹${remaining.toInt()}" : (overPaid ? "Overpaid Amount" : "Payment Fully Settled"),
+                style: TextStyle(fontSize: 12, color: remaining > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold)
             ),
           ]),
           const Spacer(),
@@ -662,7 +686,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               onChanged: _isSaving ? null : (v) => setState(() => splits[index]['collectorId'] = v),
             )),
           ),
-          _deleteButton(index),
+          _deleteRowButton(index),
         ],
       ),
     );
@@ -686,7 +710,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
     );
   }
 
-  Widget _deleteButton(int index) {
+  Widget _deleteRowButton(int index) {
     return SizedBox(width: 48, child: (splits.length > 1 && !_isSaving) ? IconButton(
       onPressed: () => setState(() {
         splits.removeAt(index);
@@ -702,23 +726,11 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
       child: OutlinedButton.icon(
         onPressed: _isSaving ? null : () {
-          // Calculate the exact balance left to suggest it in the new row
           double remaining = widget.fullAmount - totalEntered;
           if (remaining < 0) remaining = 0;
-
           setState(() {
-            // Add a new row with the balance pre-filled
-            splits.add({
-              "mode": null,
-              "amount": remaining, // AUTOMATICALLY SUGGEST PENDING AMOUNT
-              "collectorId": null,
-              "date": DateTime.now()
-            });
-
-            // Add controller for the new row
-            _amountControllers.add(
-                TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : "")
-            );
+            splits.add({"mode": null, "amount": remaining, "collectorId": null, "date": DateTime.now()});
+            _amountControllers.add(TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : ""));
           });
         },
         icon: const Icon(Icons.add_circle_outline),
@@ -734,7 +746,17 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
       child: Column(children: [
         _buildSummaryBar(isFullyPaid),
         const SizedBox(height: 24),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        Row(children: [
+          // THE NEW DELETE BUTTON FEATURE
+          if (widget.initialSplits != null && widget.onDelete != null)
+            TextButton.icon(
+              onPressed: _isSaving ? null : _confirmGrandDelete,
+              icon: const Icon(Icons.delete_forever, color: Colors.red),
+              label: const Text("DELETE PAYMENT", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+            ),
+
+          const Spacer(),
+
           TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
           const SizedBox(width: 20),
           ElevatedButton(
@@ -755,16 +777,11 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   Widget _buildSummaryBar(bool isFullyPaid) {
     double remaining = widget.fullAmount - totalEntered;
     bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
-
     Color statusColor = isFullyPaid ? Colors.green : (isPartial ? Colors.orange.shade700 : Colors.red);
 
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-          color: statusColor.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: statusColor.withOpacity(0.3))
-      ),
+      decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(16), border: Border.all(color: statusColor.withOpacity(0.3))),
       child: Row(children: [
         Icon(isFullyPaid ? Icons.check_circle : (isPartial ? Icons.info_outline : Icons.error_outline), color: statusColor),
         const SizedBox(width: 16),
@@ -772,14 +789,8 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                  isFullyPaid ? "FULLY PAID" : (remaining > 0 ? "PENDING: ₹${remaining.toInt()}" : "OVERPAID"),
-                  style: TextStyle(fontWeight: FontWeight.w900, color: statusColor, fontSize: 16)
-              ),
-              Text(
-                "Total Collected: ₹${totalEntered.toInt()} / Target: ₹${widget.fullAmount.toInt()}",
-                style: TextStyle(fontSize: 11, color: statusColor.withOpacity(0.8)),
-              ),
+              Text(isFullyPaid ? "FULLY PAID" : (remaining > 0 ? "PENDING: ₹${remaining.toInt()}" : "OVERPAID"), style: TextStyle(fontWeight: FontWeight.w900, color: statusColor, fontSize: 16)),
+              Text("Total Collected: ₹${totalEntered.toInt()} / Target: ₹${widget.fullAmount.toInt()}", style: TextStyle(fontSize: 11, color: statusColor.withOpacity(0.8))),
             ],
           ),
         ),
