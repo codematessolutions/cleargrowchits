@@ -530,6 +530,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
             final allPayments = pSnap.data!.docs;
 
+            // Map for current month payments
             Map<String, Map<String, dynamic>> currentMonthPaidMap = {
               for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
                 doc['memberId'].toString(): {
@@ -596,8 +597,14 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                               rows: filteredList.map((m) {
                                 final d = m.data() as Map<String, dynamic>;
                                 final mid = m.id;
-                                final isPaid = currentMonthPaidMap.containsKey(mid);
-                                final pMonth = isPaid ? currentMonthPaidMap[mid] : null;
+
+                                // Payment Data for current month
+                                final bool hasPaymentDoc = currentMonthPaidMap.containsKey(mid);
+                                final pMonth = hasPaymentDoc ? currentMonthPaidMap[mid] : null;
+
+                                // Determine if it's Fully Paid or Partial
+                                final String paymentStatus = pMonth?['status'] ?? "Pending";
+                                final bool isFullyPaid = paymentStatus == "Fully Paid";
 
                                 double monthlyAmount = _parseNum(d['monthlyAmount']);
                                 int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
@@ -613,11 +620,18 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                   if (wY < cY || (wY == cY && wM < cM)) wonInPast = true;
                                 }
 
+                                // Calculation Logic
                                 final mPayments = allPayments.where((p) => p['memberId'] == mid).toList();
                                 int displayPaidCount = mPayments.length;
                                 int displayTotalCount = (winnerMonth != null) ? mPayments.length : totalMonths;
-                                double totalPaid = mPayments.fold(0.0, (sum, p) => sum + _parseNum((p.data() as Map<String, dynamic>)['amount']));
-                                double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaid;
+
+                                // sum of 'collectedTotal' (or 'amount' if old records)
+                                double totalPaidSoFar = mPayments.fold(0.0, (sum, p) {
+                                  var pData = p.data() as Map<String, dynamic>;
+                                  return sum + _parseNum(pData['collectedTotal'] ?? pData['amount']);
+                                });
+
+                                double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaidSoFar;
 
                                 return DataRow(
                                   color: WidgetStateProperty.resolveWith<Color?>((states) {
@@ -647,15 +661,18 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                           fontWeight: (winnerMonth != null) ? FontWeight.bold : FontWeight.normal,
                                           color: (winnerMonth != null) ? Colors.blue.shade900 : Colors.black,
                                         ))),
-                                    DataCell(Text(currencyFormat.format(totalPaid), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
+                                    DataCell(Text(currencyFormat.format(totalPaidSoFar), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
                                     DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance),
                                         style: TextStyle(color: balance > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-                                    DataCell(_buildStatusBadge(isPaid, pMonth, winnerMonth)),
+
+                                    // --- UPDATED STATUS BADGE ---
+                                    DataCell(_buildStatusBadge(hasPaymentDoc, pMonth, winnerMonth)),
+
                                     DataCell(Text(
-                                        isPaid ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-",
+                                        hasPaymentDoc ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-",
                                         style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w500)
                                     )),
-                                    DataCell(isPaid ? Column(
+                                    DataCell(hasPaymentDoc ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
@@ -664,8 +681,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                           Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
                                       ],
                                     ) : const Text("-")),
-                                    DataCell(Text(isPaid ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 12, color: Colors.teal))),
-                                    DataCell(isPaid ? Column(
+                                    DataCell(Text(hasPaymentDoc ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 12, color: Colors.teal))),
+                                    DataCell(hasPaymentDoc ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
@@ -680,7 +697,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                         if (wonInPast) ...[
                                           const Icon(Icons.check_circle, color: Colors.green, size: 20),
                                         ] else ...[
-                                          if (isPaid)
+                                          if (hasPaymentDoc)
                                             IconButton(
                                               padding: EdgeInsets.zero,
                                               constraints: const BoxConstraints(),
@@ -700,15 +717,20 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                             onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
                                           ),
 
-                                          // --- WINNER BUTTON LOCK ---
+                                          // --- WINNER BUTTON LOCK: Only show if FULLY PAID ---
                                           if (hasWonInThisMonth)
                                             const Icon(Icons.stars, color: Colors.orange, size: 22)
-                                          else if (!anyWinnerThisMonth) // HIDDEN IF SOMEONE ELSE WON
+                                          else if (!anyWinnerThisMonth)
                                             IconButton(
                                               padding: EdgeInsets.zero,
                                               constraints: const BoxConstraints(),
-                                              icon: Icon(Icons.emoji_events_outlined, color: isPaid ? Colors.blue : Colors.grey.shade400),
-                                              onPressed: () => _markAsWinner(mid, d['name'], isPaid, pMonth),
+                                              // Icon is grey if not fully paid
+                                              icon: Icon(Icons.emoji_events_outlined,
+                                                  color: isFullyPaid ? Colors.blue : Colors.grey.shade300),
+                                              onPressed: isFullyPaid
+                                                  ? () => _markAsWinner(mid, d['name'], true, pMonth)
+                                                  : () => ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text("Partial payments cannot enter the draw!"))),
                                             ),
                                         ],
 
@@ -834,8 +856,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
   }
 // --- FIXED 5-STATUS BADGE LOGIC ---
   Widget _buildStatusBadge(bool isPaid, Map<String, dynamic>? pMonth, String? winnerMonth) {
-    Color bgColor = Color(0xFFF10505);
-    Color textColor = Color(0xFFFFFFFF);
+    Color bgColor = const Color(0xFFF10505);
+    Color textColor = const Color(0xFFFFFFFF);
     String label = "Pending";
 
     if (winnerMonth != null) {
@@ -843,14 +865,21 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     }
 
     if (isPaid && pMonth != null) {
+      // --- NEW: PARTIAL PAYMENT CHECK ---
+      // If the status is saved as "Partial", we show it immediately
+      // because partial payers aren't eligible for "On-Time" or "Advance" draw benefits.
+      if (pMonth['status'] == "Partial") {
+        return _badgeContainer("PARTIAL", Colors.orange.shade100, Colors.orange.shade900);
+      }
+
       DateTime pDate = (pMonth['paidDate'] as Timestamp).toDate();
 
       // Split monthKey (e.g., "2026_04")
-      List<String> parts = pMonth['monthKey'].split('_');
+      List<String> parts = pMonth['monthKey'].toString().split('_');
       int targetYear = int.parse(parts[0]);
       int targetMonth = int.parse(parts[1]);
 
-      // RULE 2: ADVANCE CHECK (Paid date month < Target monthKey month)
+      // RULE 2: ADVANCE CHECK
       if (pDate.year < targetYear || (pDate.year == targetYear && pDate.month < targetMonth)) {
         return _badgeContainer("ADVANCE", Colors.blue.shade100, Colors.blue.shade900);
       }
@@ -866,8 +895,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
       if (pDay.isBefore(deadLineDay) || pDay.isAtSameMomentAs(deadLineDay)) {
         label = "ON-TIME";
-        bgColor =Color(0xFF4BFF57);
-        textColor = Color(0xFFFFFFFF);
+        bgColor = const Color(0xFF4BFF57);
+        textColor = const Color(0xFFFFFFFF);
       }
       else if (pDay.isAfter(deadLineDay) && (pDay.isBefore(dDay) || pDay.isAtSameMomentAs(dDay))) {
         label = "LATE (CHANCE)";
@@ -877,7 +906,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       else {
         label = "LATE (NO CHANCE)";
         bgColor = Colors.red.shade100;
-        textColor =  Color(0xFFC27575);
+        textColor = const Color(0xFFC27575);
       }
     }
 
@@ -1008,8 +1037,19 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         initialSplits: existingPayment?['paymentSplits'],
         onConfirm: (splits, firstSplitDate) async {
           try {
+            // 1. Calculate the real-time total from all rows (Old + New)
             double totalCollected = splits.fold(0.0, (sum, s) => sum + (s['amount'] as double));
             String splitAmountsStr = splits.map((s) => s['amount'].toString()).join(", ");
+
+            // 2. Status flipping logic
+            String paymentStatus = (totalCollected >= monthlyAmount) ? "Fully Paid" : "Partial";
+
+            // 3. Multi-Collector Mapping: Get unique names for the summary column
+            // Using .toSet() ensures if same person collects twice, they appear once.
+            String allCollectors = splits
+                .map((s) => adminIdToNameMap[s['collectorId']] ?? "Unknown")
+                .toSet()
+                .join(", ");
 
             final data = {
               'kuriId': widget.kuriId,
@@ -1018,10 +1058,10 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               'monthKey': monthKey,
               'amount': monthlyAmount,
               'collectedTotal': totalCollected,
+              'status': paymentStatus,
               'splitAmounts': splitAmountsStr,
               'mode': splits.map((s) => s['mode'].toString()).join(", "),
-              // Fetch name from our map using the ID stored in splits
-              'collectedBy': splits.map((s) => adminIdToNameMap[s['collectorId']] ?? "Unknown").join(", "),
+              'collectedBy': allCollectors, // Updated to show all unique collectors
               'paymentSplits': splits.map((s) => {
                 'collectorId': s['collectorId'],
                 'collectorName': adminIdToNameMap[s['collectorId']] ?? "Unknown",
@@ -1035,8 +1075,10 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             };
 
             if (existingPayment != null && existingPayment.containsKey('id')) {
+              // Update the existing partial document with new total and new splits
               await FirebaseFirestore.instance.collection('payments').doc(existingPayment['id']).update(data);
             } else {
+              // Standard new payment creation
               data['paidAt'] = FieldValue.serverTimestamp();
               data['addedById'] = widget.userId;
               data['addedByName'] = widget.userName;
@@ -1046,15 +1088,57 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             if (mounted) {
               _fetchMembers(isInitial: true);
               Navigator.pop(c);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Payment Saved Successfully"), backgroundColor: Colors.green));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text("Payment Updated Successfully"),
+                  backgroundColor: Colors.green
+              ));
             }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text("Error: $e"),
+                backgroundColor: Colors.red
+            ));
           }
         },
       ),
     );
-  }  Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
+  }
+
+
+  Future<void> migrateOldPayments() async {
+    final db = FirebaseFirestore.instance;
+    // Get all payments
+    final snapshot = await db.collection('payments').get();
+
+    WriteBatch batch = db.batch();
+    int count = 0;
+
+    for (var doc in snapshot.docs) {
+      Map<String, dynamic> data = doc.data();
+
+      // Only update if 'status' field is missing or empty
+      if (data['status'] == null) {
+        batch.update(doc.reference, {
+          'status': 'Fully Paid',
+          // Also ensure collectedTotal exists for old records to avoid null errors in table
+          if (data['collectedTotal'] == null) 'collectedTotal': data['amount'] ?? 0.0,
+        });
+        count++;
+      }
+
+      // Batch limit is 500
+      if (count == 490) {
+        await batch.commit();
+        batch = db.batch();
+      }
+    }
+
+    if (count > 0) await batch.commit();
+    print("✅ Migration Done: $count records updated.");
+  }
+
+
+  Widget _buildCompactBox({required String label, required Widget child}) => Row(mainAxisSize: MainAxisSize.min, children: [
     Text("$label:", style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
     const SizedBox(width: 4), Expanded(child: child)
   ]);

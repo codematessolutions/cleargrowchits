@@ -511,8 +511,6 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
     if (widget.initialSplits != null) {
       splits = widget.initialSplits!.map((s) {
         String savedId = (s['collectorId'] ?? "").toString();
-
-        // Match based on ID
         bool idExists = widget.adminList.any((admin) => admin['id'] == savedId);
 
         return {
@@ -543,10 +541,13 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
   @override
   Widget build(BuildContext context) {
-    bool isTotalMatched = totalEntered.toInt() == widget.fullAmount.toInt();
-    // Check collectorId instead of collector name
+    // Logic for validation
+    bool isFullyPaid = totalEntered >= widget.fullAmount;
+    bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
     bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
-    bool isComplete = isTotalMatched && areFieldsFilled && !_isSaving;
+
+    // Allows confirm if it's either partial or full
+    bool isComplete = (isFullyPaid || isPartial) && areFieldsFilled && !_isSaving;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -556,7 +557,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildHeader(),
+            _buildHeader(), // Now shows Balance
             Padding(
               padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
               child: Row(
@@ -575,9 +576,47 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               ),
             ),
             _buildAddButton(),
-            _buildFooter(isTotalMatched, isComplete),
+            _buildFooter(isFullyPaid, isComplete),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    // Logic to show remaining balance in the header
+    double remaining = widget.fullAmount - totalEntered;
+    bool overPaid = totalEntered > widget.fullAmount;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
+      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      child: Row(
+        children: [
+          const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
+          const SizedBox(width: 16),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.memberName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+            Text(
+                remaining > 0
+                    ? "Pending Balance: ₹${remaining.toInt()}"
+                    : (overPaid ? "Overpaid Amount" : "Payment Fully Settled"),
+                style: TextStyle(
+                    fontSize: 12,
+                    color: remaining > 0 ? Colors.red : Colors.green,
+                    fontWeight: FontWeight.bold
+                )
+            ),
+          ]),
+          const Spacer(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text("Monthly Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              Text("₹${totalEntered.toInt()}", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: Color(0xFF1E3A8A))),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -608,8 +647,6 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
             onChanged: _isSaving ? null : (v) => setState(() => splits[index]['mode'] = v),
           ))),
           const SizedBox(width: 8),
-
-          // --- FIXED COLLECTOR DROPDOWN (USING ID) ---
           Expanded(
             child: _inputWrapper(DropdownButtonFormField<String>(
               value: splits[index]['collectorId'],
@@ -618,34 +655,14 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
               items: widget.adminList.map((admin) {
                 return DropdownMenuItem<String>(
-                  value: admin['id'], // ID is the value
-                  child: Text(admin['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), // Name is displayed
+                  value: admin['id'],
+                  child: Text(admin['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 );
               }).toList(),
               onChanged: _isSaving ? null : (v) => setState(() => splits[index]['collectorId'] = v),
             )),
           ),
           _deleteButton(index),
-        ],
-      ),
-    );
-  }
-
-  // --- REUSED UI HELPERS ---
-  Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
-      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      child: Row(
-        children: [
-          const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
-          const SizedBox(width: 16),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(widget.memberName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-            const Text("Update payment settlement", style: TextStyle(fontSize: 12, color: Colors.blueGrey)),
-          ]),
-          const Spacer(),
-          Text("₹${widget.fullAmount.toInt()}", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: Color(0xFF1E3A8A))),
         ],
       ),
     );
@@ -684,22 +701,38 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
       child: OutlinedButton.icon(
-        onPressed: _isSaving ? null : () => setState(() {
-          splits.add({"mode": null, "amount": 0.0, "collectorId": null, "date": DateTime.now()});
-          _amountControllers.add(TextEditingController());
-        }),
+        onPressed: _isSaving ? null : () {
+          // Calculate the exact balance left to suggest it in the new row
+          double remaining = widget.fullAmount - totalEntered;
+          if (remaining < 0) remaining = 0;
+
+          setState(() {
+            // Add a new row with the balance pre-filled
+            splits.add({
+              "mode": null,
+              "amount": remaining, // AUTOMATICALLY SUGGEST PENDING AMOUNT
+              "collectorId": null,
+              "date": DateTime.now()
+            });
+
+            // Add controller for the new row
+            _amountControllers.add(
+                TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : "")
+            );
+          });
+        },
         icon: const Icon(Icons.add_circle_outline),
-        label: const Text("ADD ANOTHER DATE / SPLIT"),
+        label: const Text("PAY PENDING AMOUNT / ADD SPLIT"),
       ),
     );
   }
 
-  Widget _buildFooter(bool isMatch, bool isComplete) {
+  Widget _buildFooter(bool isFullyPaid, bool isComplete) {
     return Container(
       padding: const EdgeInsets.all(32),
       decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(bottom: Radius.circular(24))),
       child: Column(children: [
-        _buildSummaryBar(isMatch),
+        _buildSummaryBar(isFullyPaid),
         const SizedBox(height: 24),
         Row(mainAxisAlignment: MainAxisAlignment.end, children: [
           TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
@@ -710,27 +743,52 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
               setState(() => _isSaving = true);
               await widget.onConfirm(splits, splits.first['date']);
             } : null,
-            child: _isSaving ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text("CONFIRM PAYMENT"),
+            child: _isSaving
+                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text("CONFIRM PAYMENT"),
           ),
         ]),
       ]),
     );
   }
 
-  Widget _headerTxt(String label, double width) => SizedBox(width: width > 0 ? width : null, child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8))));
-  Widget _inputWrapper(Widget child) => Container(height: 48, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE2E8F0)), borderRadius: BorderRadius.circular(12), color: Colors.white), child: child);
+  Widget _buildSummaryBar(bool isFullyPaid) {
+    double remaining = widget.fullAmount - totalEntered;
+    bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
 
-  Widget _buildSummaryBar(bool isMatch) {
+    Color statusColor = isFullyPaid ? Colors.green : (isPartial ? Colors.orange.shade700 : Colors.red);
+
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: isMatch ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(16)),
+      decoration: BoxDecoration(
+          color: statusColor.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: statusColor.withOpacity(0.3))
+      ),
       child: Row(children: [
-        Icon(isMatch ? Icons.check_circle : Icons.error, color: isMatch ? Colors.green : Colors.red),
+        Icon(isFullyPaid ? Icons.check_circle : (isPartial ? Icons.info_outline : Icons.error_outline), color: statusColor),
         const SizedBox(width: 16),
-        Text("TOTAL: ₹${totalEntered.toInt()}", style: TextStyle(fontWeight: FontWeight.w900, color: isMatch ? Colors.green : Colors.red)),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                  isFullyPaid ? "FULLY PAID" : (remaining > 0 ? "PENDING: ₹${remaining.toInt()}" : "OVERPAID"),
+                  style: TextStyle(fontWeight: FontWeight.w900, color: statusColor, fontSize: 16)
+              ),
+              Text(
+                "Total Collected: ₹${totalEntered.toInt()} / Target: ₹${widget.fullAmount.toInt()}",
+                style: TextStyle(fontSize: 11, color: statusColor.withOpacity(0.8)),
+              ),
+            ],
+          ),
+        ),
       ]),
     );
   }
+
+  Widget _headerTxt(String label, double width) => SizedBox(width: width > 0 ? width : null, child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8))));
+  Widget _inputWrapper(Widget child) => Container(height: 48, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE2E8F0)), borderRadius: BorderRadius.circular(12), color: Colors.white), child: child);
 }
 Widget buildFunnyLoader() {
   final messages = [
