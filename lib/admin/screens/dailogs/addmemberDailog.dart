@@ -575,10 +575,17 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. Existing logic
     bool isFullyPaid = totalEntered >= widget.fullAmount;
     bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
+
+    // 2. NEW VALIDATION: Check if amount exceeds target
+    bool isOverPaid = totalEntered > widget.fullAmount;
+
     bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
-    bool isComplete = (isFullyPaid || isPartial) && areFieldsFilled && !_isSaving;
+
+    // 3. UPDATED: Added !isOverPaid to the final check
+    bool isComplete = (isFullyPaid || isPartial) && !isOverPaid && areFieldsFilled && !_isSaving;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -616,7 +623,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
   Widget _buildHeader() {
     double remaining = widget.fullAmount - totalEntered;
-    bool overPaid = totalEntered > widget.fullAmount;
+    bool isOverPaid = totalEntered > widget.fullAmount; // NEW VALIDATION FLAG
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
@@ -628,8 +635,13 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(widget.memberName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             Text(
-                remaining > 0 ? "Pending Balance: ₹${remaining.toInt()}" : (overPaid ? "Overpaid Amount" : "Payment Fully Settled"),
-                style: TextStyle(fontSize: 12, color: remaining > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold)
+                isOverPaid
+                    ? "⚠️ EXCEEDS LIMIT: ₹${totalEntered.toInt()}" // NEW WARNING
+                    : (remaining > 0 ? "Pending Balance: ₹${remaining.toInt()}" : "Payment Fully Settled"),
+                style: TextStyle(
+                    fontSize: 12,
+                    color: isOverPaid ? Colors.purple : (remaining > 0 ? Colors.red : Colors.green),
+                    fontWeight: FontWeight.bold)
             ),
           ]),
           const Spacer(),
@@ -637,7 +649,13 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text("Monthly Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              Text("₹${totalEntered.toInt()}", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: Color(0xFF1E3A8A))),
+              Text("₹${totalEntered.toInt()}",
+                  style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 24,
+                      color: isOverPaid ? Colors.red : const Color(0xFF1E3A8A) // COLOR CHANGE ON ERROR
+                  )
+              ),
             ],
           ),
         ],
@@ -747,20 +765,21 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
         _buildSummaryBar(isFullyPaid),
         const SizedBox(height: 24),
         Row(children: [
-          // THE NEW DELETE BUTTON FEATURE
           if (widget.initialSplits != null && widget.onDelete != null)
             TextButton.icon(
               onPressed: _isSaving ? null : _confirmGrandDelete,
               icon: const Icon(Icons.delete_forever, color: Colors.red),
               label: const Text("DELETE PAYMENT", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
             ),
-
           const Spacer(),
-
           TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
           const SizedBox(width: 20),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1E3A8A),
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: Colors.grey.shade300, // VISUAL FEEDBACK
+            ),
             onPressed: isComplete ? () async {
               setState(() => _isSaving = true);
               await widget.onConfirm(splits, splits.first['date']);
@@ -777,27 +796,46 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
   Widget _buildSummaryBar(bool isFullyPaid) {
     double remaining = widget.fullAmount - totalEntered;
     bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
-    Color statusColor = isFullyPaid ? Colors.green : (isPartial ? Colors.orange.shade700 : Colors.red);
+    bool isOverPaid = totalEntered > widget.fullAmount; // NEW
+
+    // Adjust color if overpaid
+    Color statusColor = isOverPaid ? Colors.purple : (isFullyPaid ? Colors.green : (isPartial ? Colors.orange.shade700 : Colors.red));
 
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(16), border: Border.all(color: statusColor.withOpacity(0.3))),
+      decoration: BoxDecoration(
+          color: statusColor.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: statusColor.withOpacity(0.3))
+      ),
       child: Row(children: [
-        Icon(isFullyPaid ? Icons.check_circle : (isPartial ? Icons.info_outline : Icons.error_outline), color: statusColor),
+        Icon(
+            isOverPaid ? Icons.warning_amber_rounded : (isFullyPaid ? Icons.check_circle : (isPartial ? Icons.info_outline : Icons.error_outline)),
+            color: statusColor
+        ),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(isFullyPaid ? "FULLY PAID" : (remaining > 0 ? "PENDING: ₹${remaining.toInt()}" : "OVERPAID"), style: TextStyle(fontWeight: FontWeight.w900, color: statusColor, fontSize: 16)),
-              Text("Total Collected: ₹${totalEntered.toInt()} / Target: ₹${widget.fullAmount.toInt()}", style: TextStyle(fontSize: 11, color: statusColor.withOpacity(0.8))),
+              Text(
+                  isOverPaid
+                      ? "LIMIT EXCEEDED"
+                      : (isFullyPaid ? "FULLY PAID" : (remaining > 0 ? "PENDING: ₹${remaining.toInt()}" : "OVERPAID")),
+                  style: TextStyle(fontWeight: FontWeight.w900, color: statusColor, fontSize: 16)
+              ),
+              Text(
+                  isOverPaid
+                      ? "You cannot collect more than the target ₹${widget.fullAmount.toInt()}"
+                      : "Total Collected: ₹${totalEntered.toInt()} / Target: ₹${widget.fullAmount.toInt()}",
+                  style: TextStyle(fontSize: 11, color: statusColor.withOpacity(0.8))
+              ),
             ],
           ),
         ),
       ]),
     );
   }
-
   Widget _headerTxt(String label, double width) => SizedBox(width: width > 0 ? width : null, child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Color(0xFF94A3B8))));
   Widget _inputWrapper(Widget child) => Container(height: 48, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE2E8F0)), borderRadius: BorderRadius.circular(12), color: Colors.white), child: child);
 }
