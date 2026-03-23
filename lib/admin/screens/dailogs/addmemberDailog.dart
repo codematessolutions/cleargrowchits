@@ -484,9 +484,11 @@ class _SelectFromMasterDialogState extends State<SelectFromMasterDialog> {
 class MarkPaymentDialog extends StatefulWidget {
   final String memberName;
   final double fullAmount;
+
   final List<Map<String, dynamic>>? initialSplits;
   final List<Map<String, String>> adminList;
   final Function(List<Map<String, dynamic>>, DateTime) onConfirm;
+  final String kuriNumber;
 
   // NEW FEATURE: Callback to delete the entire payment record
   final Future<void> Function()? onDelete;
@@ -497,6 +499,7 @@ class MarkPaymentDialog extends StatefulWidget {
     required this.fullAmount,
     required this.adminList,
     required this.onConfirm,
+    required this.kuriNumber,
     this.initialSplits,
     this.onDelete,
   });
@@ -633,7 +636,7 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
           const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
           const SizedBox(width: 16),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(widget.memberName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+            Text("${widget.memberName.toUpperCase()} (${widget.kuriNumber})", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             Text(
                 isOverPaid
                     ? "⚠️ EXCEEDS LIMIT: ₹${totalEntered.toInt()}" // NEW WARNING

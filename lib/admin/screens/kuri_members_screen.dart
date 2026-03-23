@@ -545,7 +545,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               return data['winnerMonth'] == monthKey;
             });
 
-            List<DocumentSnapshot> filteredList = _allMembers.where((mDoc) {
+            final List<dynamic> memberPool = _allMembers; // Use a dynamic proxy
+            List<dynamic> filteredList = memberPool.where((mDoc) {
               final mid = mDoc.id;
               final isPaid = currentMonthPaidMap.containsKey(mid);
               if (selectedStatus == "Paid" && !isPaid) return false;
@@ -595,8 +596,16 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                 DataColumn(label: Text("ACTION")),
                               ],
                               rows: filteredList.map((m) {
-                                final d = m.data() as Map<String, dynamic>;
-                                final mid = m.id;
+                                int masterIndex = _allMembers.indexWhere((DocumentSnapshot element) => element.id == m.id);
+
+                                // 2. FIX: Cast the result explicitly to DocumentSnapshot
+                                final DocumentSnapshot currentMemberDoc = (masterIndex != -1)
+                                    ? _allMembers[masterIndex]
+                                    : m;
+
+                                // 3. Ensure data is cast correctly
+                                final d = currentMemberDoc.data() as Map<String, dynamic>? ?? {};
+                                final mid = currentMemberDoc.id;
 
                                 // Payment Data for current month
                                 final bool hasPaymentDoc = currentMonthPaidMap.containsKey(mid);
@@ -703,12 +712,12 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                               constraints: const BoxConstraints(),
                                               icon: const Icon(Icons.edit_calendar, color: Colors.orange, size: 18),
                                               onPressed: () => _showMarkPaymentDialog(
-                                                mid, d['name'], d['masterId'] ?? mid, monthlyAmount,
+                                                mid, d['name'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount,
                                                 existingPayment: pMonth,
                                               ),
                                             )
                                           else
-                                            _buildPayButton(mid, d['name'], d['masterId'] ?? mid, monthlyAmount),
+                                            _buildPayButton(mid, d['name'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount),
 
                                           IconButton(
                                             padding: EdgeInsets.zero,
@@ -739,7 +748,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                             padding: EdgeInsets.zero,
                                             constraints: const BoxConstraints(),
                                             icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
-                                            onPressed: () => _showEditEnrollmentDialog(m),
+                                            onPressed: () => _showEditEnrollmentDialog(currentMemberDoc),
                                           ),
                                           IconButton(
                                             padding: EdgeInsets.zero,
@@ -999,7 +1008,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
 // Ensure you have a matching _showLoadingDialog or use this one
 
-  Widget _buildPayButton(String enrollmentId, String name, String masterId, double monthlyAmount) {
+  Widget _buildPayButton(String enrollmentId, String name,String kuriNumber, String masterId, double monthlyAmount) {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
         backgroundColor: Colors.green,
@@ -1007,12 +1016,12 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         minimumSize: const Size(50, 28),
         elevation: 0,
       ),
-      onPressed: () => _showMarkPaymentDialog(enrollmentId, name, masterId, monthlyAmount),
+      onPressed: () => _showMarkPaymentDialog(enrollmentId, name,kuriNumber, masterId, monthlyAmount),
       child: const Text("PAY", style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold)),
     );
   }
 
-  void _showMarkPaymentDialog(String enrollmentId, String name, String masterId, double monthlyAmount, {Map<String, dynamic>? existingPayment}) async {
+  void _showMarkPaymentDialog(String enrollmentId, String name,String kuriNumber, String masterId, double monthlyAmount, {Map<String, dynamic>? existingPayment}) async {
     // 1. Fetch admins and create a List of Maps for the dialog
     final adminSnap = await FirebaseFirestore.instance.collection('staff_admins').orderBy('name').get();
 
@@ -1120,7 +1129,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 backgroundColor: Colors.red
             ));
           }
-        },
+        }, kuriNumber: kuriNumber,
       ),
     );
   }
@@ -1411,21 +1420,14 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     final kNoCtrl = TextEditingController(text: data['kuriNumber']?.toString());
     final amtCtrl = TextEditingController(text: data['monthlyAmount']?.toString());
 
-    final double masterKuriAmount = double.tryParse(widget.kuriData['monthlyAmount']?.toString() ?? '0') ?? 0.0;
     final String oldKuriNumber = data['kuriNumber']?.toString() ?? "";
-
-    // masterId is required to update the master_members collection
     final String? masterId = data['masterId'];
 
-    // 2. Get Kuri End Date
-    DateTime kuriEndDate;
-    if (widget.kuriData['kuriEndDate'] is Timestamp) {
-      kuriEndDate = (widget.kuriData['kuriEndDate'] as Timestamp).toDate();
-    } else {
-      kuriEndDate = DateTime(2026, 9, 1);
-    }
+    // 2. Date/Months Logic
+    DateTime kuriEndDate = (widget.kuriData['kuriEndDate'] is Timestamp)
+        ? (widget.kuriData['kuriEndDate'] as Timestamp).toDate()
+        : DateTime(2026, 9, 1);
 
-    // 3. Parse Joining Month
     DateTime currentJoiningDate;
     try {
       List<String> parts = data['joiningMonth'].toString().split('_');
@@ -1434,150 +1436,194 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       currentJoiningDate = DateTime.now();
     }
 
-    // Correct Month Calculation (+1 formula)
-    int calculateMonths(DateTime start, DateTime end) {
-      return ((end.year - start.year) * 12) + (end.month - start.month) + 1;
-    }
+    int calculateMonths(DateTime start, DateTime end) =>
+        ((end.year - start.year) * 12) + (end.month - start.month) + 1;
 
     int calculatedTotalMonths = calculateMonths(currentJoiningDate, kuriEndDate);
-    bool _isSaving = false;
+    bool isSaving = false;
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text("Edit Member Details", style: TextStyle(fontWeight: FontWeight.bold)),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: "Member Name")),
-                    const SizedBox(height: 10),
-                    TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: "Phone Number"), keyboardType: TextInputType.phone),
-                    const SizedBox(height: 10),
-                    TextField(controller: placeCtrl, decoration: const InputDecoration(labelText: "Place")),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(child: TextField(controller: kNoCtrl, decoration: const InputDecoration(labelText: "Kuri No"))),
-                        const SizedBox(width: 10),
-                        Expanded(child: TextField(controller: amtCtrl, decoration: const InputDecoration(labelText: "Monthly Amt"), keyboardType: TextInputType.number)),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    InkWell(
-                      onTap: () async {
-                        final DateTime? picked = await showDatePicker(
-                          context: context,
-                          initialDate: currentJoiningDate,
-                          firstDate: DateTime(2020),
-                          lastDate: kuriEndDate,
-                        );
-                        if (picked != null) {
-                          setDialogState(() {
-                            currentJoiningDate = picked;
-                            calculatedTotalMonths = calculateMonths(picked, kuriEndDate);
-                          });
-                        }
-                      },
-                      child: InputDecorator(
-                        decoration: const InputDecoration(labelText: "Joining Month", border: OutlineInputBorder()),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(DateFormat('MMMM yyyy').format(currentJoiningDate), style: const TextStyle(fontWeight: FontWeight.bold)),
-                                const Icon(Icons.calendar_month, color: Colors.blue),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text("Installments: $calculatedTotalMonths", style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
-                  onPressed: _isSaving ? null : () async {
-                    final newKNo = kNoCtrl.text.trim();
-                    final double newAmt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
-                    final String newPlace = placeCtrl.text.trim().toUpperCase();
+      // CRITICAL: Prevent user from clicking 'Esc' or background during save
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (stfContext, setDialogState) {
 
-                    if (nameCtrl.text.isEmpty) return;
+          // Helper to prevent calling state on a closed dialog
+          void safeSetDialogState(VoidCallback fn) {
+            if (stfContext.mounted) setDialogState(fn);
+          }
 
-                    setDialogState(() => _isSaving = true);
-
-                    try {
-                      // Check duplicate Kuri No
-                      if (newKNo != oldKuriNumber) {
-                        final dup = await FirebaseFirestore.instance
-                            .collection('enrollments')
-                            .where('kuriId', isEqualTo: widget.kuriId)
-                            .where('kuriNumber', isEqualTo: newKNo)
-                            .get();
-                        if (dup.docs.isNotEmpty) {
-                          setDialogState(() => _isSaving = false);
-                          return;
-                        }
-                      }
-
-                      final db = FirebaseFirestore.instance;
-                      WriteBatch batch = db.batch();
-
-                      // --- 1. UPDATE ENROLLMENT COLLECTION ---
-                      DocumentReference enrollRef = db.collection('enrollments').doc(doc.id);
-                      batch.update(enrollRef, {
-                        'name': nameCtrl.text.trim().toUpperCase(),
-                        'phone': phoneCtrl.text.trim(),
-                        'place': newPlace,
-                        'kuriNumber': newKNo,
-                        'monthlyAmount': newAmt,
-                        'joiningMonth': DateFormat('yyyy_MM').format(currentJoiningDate),
-                        'totalMonths': calculatedTotalMonths,
-                        'lastEditedBy': widget.userName,
-                        'lastEditedAt': FieldValue.serverTimestamp(),
-                      });
-
-                      // --- 2. UPDATE MASTER_MEMBERS COLLECTION AUTOMATICALLY ---
-                      if (masterId != null && masterId.isNotEmpty) {
-                        DocumentReference masterRef = db.collection('master_members').doc(masterId);
-                        batch.update(masterRef, {
-                          'place': newPlace,
-                          'name': nameCtrl.text.trim().toUpperCase(),
-                          'phone': phoneCtrl.text.trim(),
-                          'updatedAt': FieldValue.serverTimestamp(),
-                          'updatedBy': widget.userName,
+          return AlertDialog(
+            title: const Text("Edit Member Details", style: TextStyle(fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: "Member Name")),
+                  const SizedBox(height: 10),
+                  TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: "Phone Number"), keyboardType: TextInputType.phone),
+                  const SizedBox(height: 10),
+                  TextField(controller: placeCtrl, decoration: const InputDecoration(labelText: "Place")),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(child: TextField(controller: kNoCtrl, decoration: const InputDecoration(labelText: "Kuri No"))),
+                      const SizedBox(width: 10),
+                      Expanded(child: TextField(controller: amtCtrl, decoration: const InputDecoration(labelText: "Monthly Amt"), keyboardType: TextInputType.number)),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  InkWell(
+                    onTap: () async {
+                      final DateTime? picked = await showDatePicker(
+                        context: stfContext,
+                        initialDate: currentJoiningDate,
+                        firstDate: DateTime(2020),
+                        lastDate: kuriEndDate,
+                      );
+                      if (picked != null) {
+                        safeSetDialogState(() {
+                          currentJoiningDate = picked;
+                          calculatedTotalMonths = calculateMonths(picked, kuriEndDate);
                         });
                       }
+                    },
+                    child: InputDecorator(
+                      decoration: const InputDecoration(labelText: "Joining Month", border: OutlineInputBorder()),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(DateFormat('MMMM yyyy').format(currentJoiningDate), style: const TextStyle(fontWeight: FontWeight.bold)),
+                              const Icon(Icons.calendar_month, color: Colors.blue),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text("Installments: $calculatedTotalMonths", style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                  child: const Text("CANCEL")
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+                onPressed: isSaving ? null : () async {
+                  final newKNo = kNoCtrl.text.trim();
+                  final double newAmt = double.tryParse(amtCtrl.text.trim()) ?? 0.0;
+                  final String newPlace = placeCtrl.text.trim().toUpperCase();
+                  final String newName = nameCtrl.text.trim().toUpperCase();
+                  final String newPhone = phoneCtrl.text.trim();
 
-                      await batch.commit();
+                  if (newName.isEmpty) return;
 
-                      if (mounted) {
-                        Navigator.pop(context);
-                        _fetchMembers(isInitial: true);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enrollment & Master updated")));
+                  safeSetDialogState(() => isSaving = true);
+
+                  try {
+                    final db = FirebaseFirestore.instance;
+
+                    // Duplicate Check
+                    if (newKNo != oldKuriNumber) {
+                      final dup = await db.collection('enrollments')
+                          .where('kuriId', isEqualTo: widget.kuriId)
+                          .where('kuriNumber', isEqualTo: newKNo)
+                          .get();
+
+                      if (!stfContext.mounted) return;
+
+                      if (dup.docs.isNotEmpty) {
+                        safeSetDialogState(() => isSaving = false);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Kuri No already exists")));
+                        return;
                       }
-                    } catch (e) {
-                      print(e);
-                    } finally {
-                      if (mounted) setDialogState(() => _isSaving = false);
                     }
-                  },
-                  child: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text("UPDATE"),
-                ),
-              ],
-            );
-          }
+
+                    WriteBatch batch = db.batch();
+                    DocumentReference enrollRef = db.collection('enrollments').doc(doc.id);
+
+                    batch.update(enrollRef, {
+                      'name': newName,
+                      'phone': newPhone,
+                      'place': newPlace,
+                      'kuriNumber': newKNo,
+                      'monthlyAmount': newAmt,
+                      'joiningMonth': DateFormat('yyyy_MM').format(currentJoiningDate),
+                      'totalMonths': calculatedTotalMonths,
+                      'lastEditedBy': widget.userName,
+                      'lastEditedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    if (masterId != null && masterId.isNotEmpty) {
+                      batch.update(db.collection('master_members').doc(masterId), {
+                        'place': newPlace,
+                        'name': newName,
+                        'phone': newPhone,
+                        'updatedAt': FieldValue.serverTimestamp(),
+                        'updatedBy': widget.userName,
+                      });
+                    }
+
+                    await batch.commit();
+                    final updatedDoc = await enrollRef.get();
+
+                    // --- THE ULTIMATE SAFETY LOCK ---
+                    if (!stfContext.mounted) return;
+
+                    // 1. Close the dialog first.
+                    Navigator.of(dialogContext).pop();
+
+                    // 2. DELAY the main screen update until the next frame.
+                    // This allows the dialog to be fully "gone" from the engine before the screen refreshes.
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        setState(() {
+                          int index = _allMembers.indexWhere((m) => m.id == doc.id);
+                          if (index != -1) {
+                            List<DocumentSnapshot> newList = List.from(_allMembers);
+                            newList[index] = updatedDoc;
+                            _allMembers = newList;
+                          }
+                        });
+
+                        if (newKNo != oldKuriNumber) {
+                          _fetchMembers(isInitial: true);
+                        }
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Updated successfully"))
+                        );
+                      }
+                    });
+
+                  } catch (e) {
+                    debugPrint("Update Error: $e");
+                    safeSetDialogState(() => isSaving = false);
+                  }
+                },
+                child: isSaving
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text("UPDATE"),
+              ),
+            ],
+          );
+        },
       ),
     );
+  }
+
+  Future<void> _softRefresh() async {
+    // This triggers the StreamBuilder to rebuild the table
+    // with the latest data from Firestore without clearing _allMembers.
+    setState(() {});
   }
 // --- DELETE (ARCHIVE) LOGIC ---
   void _confirmDeleteEnrollment(String id, Map<String, dynamic> data) {
