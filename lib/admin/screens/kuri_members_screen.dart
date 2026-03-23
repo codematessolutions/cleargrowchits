@@ -677,9 +677,44 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                     // --- UPDATED STATUS BADGE ---
                                     DataCell(_buildStatusBadge(hasPaymentDoc, pMonth, winnerMonth)),
 
-                                    DataCell(Text(
-                                        hasPaymentDoc ? DateFormat('dd-MM-yy').format((pMonth!['paidDate'] as Timestamp).toDate()) : "-",
-                                        style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w500)
+                                    DataCell(Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                      child: Builder(builder: (context) {
+                                        if (!hasPaymentDoc || pMonth == null) return const Text("-");
+
+                                        final splits = pMonth['paymentSplits'] as List?;
+
+                                        // 1. Get unique formatted dates
+                                        List<String> formattedDates = [];
+                                        if (splits != null && splits.isNotEmpty) {
+                                          formattedDates = splits.map((s) {
+                                            final splitDate = s['date'];
+                                            if (splitDate is Timestamp) {
+                                              return DateFormat('dd-MM-yy').format(splitDate.toDate());
+                                            }
+                                            return splitDate?.toString() ?? "";
+                                          }).where((d) => d.isNotEmpty).toSet().toList();
+                                        } else if (pMonth['paidDate'] is Timestamp) {
+                                          formattedDates = [DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate())];
+                                        }
+
+                                        if (formattedDates.isEmpty) return const Text("-");
+
+                                        // 2. Return a Column for vertical stacking
+                                        return Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: formattedDates.map((dateStr) => Text(
+                                            dateStr,
+                                            style: const TextStyle(
+                                              fontSize: 10, // Smaller font for multiple lines
+                                              color: Colors.blueGrey,
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.2, // Tighter line height
+                                            ),
+                                          )).toList(),
+                                        );
+                                      }),
                                     )),
                                     DataCell(hasPaymentDoc ? Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
