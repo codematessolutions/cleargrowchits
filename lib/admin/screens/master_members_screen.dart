@@ -97,19 +97,20 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
 
   // --- WEB STATS HEADER ---
   Widget _buildWebStatsHeader() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('master_members').snapshots(),
+    return FutureBuilder<AggregateQuerySnapshot>(
+      // This query counts on the server and returns ONLY the number.
+      future: FirebaseFirestore.instance.collection('master_members').count().get(),
       builder: (context, snapshot) {
-        int count = snapshot.hasData ? snapshot.data!.docs.length : 0;
+        // Use the actual count from the server, or 0 if loading
+        String count = snapshot.hasData ? snapshot.data!.count.toString() : "...";
+
         return Container(
           height: 80,
           padding: const EdgeInsets.symmetric(horizontal: 30),
           color: const Color(0xFF1E3A8A),
           child: Row(
             children: [
-              _webStatItem("TOTAL DIRECTORY", count.toString(), Icons.badge),
-              _webVDivider(),
-              _webStatItem("ACTIVE ACCOUNTS", count.toString(), Icons.verified),
+              _webStatItem("TOTAL DIRECTORY", count, Icons.badge),
               _webVDivider(),
               _webStatItem("SYSTEM ROLE", widget.userRole.toUpperCase(), Icons.security),
             ],
@@ -173,7 +174,7 @@ class _MasterMemberScreenState extends State<MasterMemberScreen> {
   // --- DATA TABLE ---
   Widget _buildWebDataTable() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('master_members').snapshots(),
+      stream: FirebaseFirestore.instance.collection('master_members') .limit(30).snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 

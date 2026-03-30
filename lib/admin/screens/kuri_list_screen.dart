@@ -8,7 +8,6 @@ import '../models/kuri_model.dart';
 import '../providers/kuri_provider.dart';
 import 'collector_report_screen.dart';
 import 'kuri_members_screen.dart';
-import 'scheme_list_screen.dart';
 
 
 

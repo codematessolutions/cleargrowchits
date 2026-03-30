@@ -8,8 +8,16 @@ class KuriProvider with ChangeNotifier {
 
   // Stream to get all Kuris in real-time
   Stream<List<KuriModel>> get kurisStream {
-    return _db.collection('kuris').orderBy('createdAt', descending: true).snapshots().map(
-          (snapshot) => snapshot.docs.map((doc) => KuriModel.fromFirestore(doc)).toList(),
+    return _db
+        .collection('kuris')
+    // 1. Always use orderBy with limit to ensure you get the NEWEST data first
+        .orderBy('createdAt', descending: true)
+    // 2. Set a reasonable limit (e.g., 20 or 50) for a single screen
+        .limit(3)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+        .map((doc) => KuriModel.fromFirestore(doc))
+        .toList(),
     );
   }
 

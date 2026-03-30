@@ -187,12 +187,15 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButtonLocation: FloatingActionButtonLocation.endTop,
       appBar: AppBar(
         title: Text("${widget.kuriName} Management"),
         backgroundColor: SchemeTheme.primaryBlue,
         foregroundColor: Colors.white,
       ),
       floatingActionButton: FloatingActionButton.extended(
+
+
         onPressed: _showAddMember,
         label: const Text("Enroll Member",style: TextStyle(color: Colors.white),),
         icon: const Icon(Icons.person_add_alt_1,color: Colors.white,),
@@ -211,82 +214,147 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   // --- UI COMPONENTS ---
 
+  // Widget _buildDetailRibbon() {
+  //   final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  //
+  //   return StreamBuilder<DocumentSnapshot>(
+  //     stream: FirebaseFirestore.instance.collection('kuris').doc(widget.kuriId).snapshots(),
+  //     builder: (context, kSnap) {
+  //       if (!kSnap.hasData) return const SizedBox(height: 35);
+  //       var kuriData = kSnap.data!.data() as Map<String, dynamic>;
+  //
+  //       // Format Start and End Dates
+  //       String startStr = kuriData['startMonth'] != null
+  //           ? DateFormat('MMM yy').format((kuriData['startMonth'] as Timestamp).toDate())
+  //           : "-";
+  //       String endStr = kuriData['endMonth'] != null
+  //           ? DateFormat('MMM yy').format((kuriData['endMonth'] as Timestamp).toDate())
+  //           : "-";
+  //
+  //       return StreamBuilder<QuerySnapshot>(
+  //         stream: FirebaseFirestore.instance.collection('enrollments').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
+  //         builder: (context, mSnap) {
+  //           return StreamBuilder<QuerySnapshot>(
+  //             stream: FirebaseFirestore.instance.collection('payments')
+  //                 .where('kuriId', isEqualTo: widget.kuriId)
+  //                 .where('monthKey', isEqualTo: monthKey).snapshots(),
+  //             builder: (context, pSnap) {
+  //               final totalMembers = mSnap.data?.docs.length ?? 0;
+  //               final paidMembers = pSnap.data?.docs.length ?? 0;
+  //
+  //               return Container(
+  //                 height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
+  //                 child: SingleChildScrollView(
+  //                   scrollDirection: Axis.horizontal,
+  //                   padding: const EdgeInsets.symmetric(horizontal: 10),
+  //                   child: Row(
+  //                     children: [
+  //                       _compactItem("KURI", widget.kuriName.toUpperCase(), isTitle: true),
+  //
+  //
+  //                       _vDivider(),
+  //                       _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
+  //                       _vDivider(),
+  //                       _compactItem("DRAW DATE", kuriData['kuriDate']?.toString() ?? ""),
+  //                       _vDivider(),
+  //                       // Added Start and End Dates at the end
+  //                       _compactItem("START", startStr),
+  //                       _vDivider(),
+  //                       _compactItem("END", endStr),
+  //                       _vDivider(),
+  //                       ElevatedButton.icon(
+  //                         onPressed: _isLoading ? null : () async {
+  //                           await _generateFullKuriPDF();
+  //                         },
+  //                         icon: _isLoading
+  //                             ? const SizedBox(width: 10, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+  //                             : const Icon(Icons.download_rounded, size: 18),
+  //                         label: const Text("PDF"),
+  //                         style: ElevatedButton.styleFrom(
+  //                           backgroundColor: Colors.blueAccent,
+  //                           foregroundColor: Colors.white,
+  //                           // padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+  //                           elevation: 2,
+  //                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+  //                         ),
+  //                       )
+  //                     ],
+  //                   ),
+  //                 ),
+  //               );
+  //             },
+  //           );
+  //         },
+  //       );
+  //     },
+  //   );
+  // }
   Widget _buildDetailRibbon() {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('kuris').doc(widget.kuriId).snapshots(),
-      builder: (context, kSnap) {
-        if (!kSnap.hasData) return const SizedBox(height: 35);
-        var kuriData = kSnap.data!.data() as Map<String, dynamic>;
+    // 1. Check if we already have the static data to avoid showing a blank bar
+    if (widget.kuriData.isEmpty) return const SizedBox(height: 35);
 
-        // Format Start and End Dates
-        String startStr = kuriData['startMonth'] != null
-            ? DateFormat('MMM yy').format((kuriData['startMonth'] as Timestamp).toDate())
-            : "-";
-        String endStr = kuriData['endMonth'] != null
-            ? DateFormat('MMM yy').format((kuriData['endMonth'] as Timestamp).toDate())
-            : "-";
+    // 2. Format Start and End Dates (Using the data passed into the widget)
+    String startStr = widget.kuriData['startMonth'] != null
+        ? DateFormat('MMM yy').format((widget.kuriData['startMonth'] as Timestamp).toDate())
+        : "-";
+    String endStr = widget.kuriData['endMonth'] != null
+        ? DateFormat('MMM yy').format((widget.kuriData['endMonth'] as Timestamp).toDate())
+        : "-";
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('enrollments').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
-          builder: (context, mSnap) {
-            return StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('payments')
-                  .where('kuriId', isEqualTo: widget.kuriId)
-                  .where('monthKey', isEqualTo: monthKey).snapshots(),
-              builder: (context, pSnap) {
-                final totalMembers = mSnap.data?.docs.length ?? 0;
-                final paidMembers = pSnap.data?.docs.length ?? 0;
+    // 3. ONLY Stream the payments for THIS month (The high-frequency data)
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('payments')
+          .where('kuriId', isEqualTo: widget.kuriId)
+          .where('monthKey', isEqualTo: monthKey)
+          .snapshots(),
+      builder: (context, pSnap) {
+        // Logic from your existing code preserved:
+        // We use _allMembers.length (already fetched in your screen) to avoid
+        // a second StreamBuilder just for the enrollment count.
+        final totalMembers = _allMembers.length;
+        final paidMembers = pSnap.data?.docs.length ?? 0;
 
-                return Container(
-                  height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: Row(
-                      children: [
-                        _compactItem("KURI", widget.kuriName.toUpperCase(), isTitle: true),
-
-
-                        _vDivider(),
-                        _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
-                        _vDivider(),
-                        _compactItem("DRAW DATE", kuriData['kuriDate']?.toString() ?? ""),
-                        _vDivider(),
-                        // Added Start and End Dates at the end
-                        _compactItem("START", startStr),
-                        _vDivider(),
-                        _compactItem("END", endStr),
-                        _vDivider(),
-                        ElevatedButton.icon(
-                          onPressed: _isLoading ? null : () async {
-                            await _generateFullKuriPDF();
-                          },
-                          icon: _isLoading
-                              ? const SizedBox(width: 10, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                              : const Icon(Icons.download_rounded, size: 18),
-                          label: const Text("PDF"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blueAccent,
-                            foregroundColor: Colors.white,
-                            // padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                            elevation: 2,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        )
-                      ],
-                    ),
+        return Container(
+          height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: [
+                _compactItem("KURI", widget.kuriName.toUpperCase(), isTitle: true),
+                _vDivider(),
+                _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
+                _vDivider(),
+                _compactItem("DRAW DATE", widget.kuriData['kuriDate']?.toString() ?? ""),
+                _vDivider(),
+                _compactItem("START", startStr),
+                _vDivider(),
+                _compactItem("END", endStr),
+                _vDivider(),
+                ElevatedButton.icon(
+                  onPressed: _isLoading ? null : () async {
+                    await _generateFullKuriPDF();
+                  },
+                  icon: _isLoading
+                      ? const SizedBox(width: 10, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.download_rounded, size: 18),
+                  label: const Text("PDF"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueAccent,
+                    foregroundColor: Colors.white,
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                );
-              },
-            );
-          },
+                )
+              ],
+            ),
+          ),
         );
       },
     );
   }
-
   Widget _buildSearchAndFilters() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -524,6 +592,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
           stream: FirebaseFirestore.instance
               .collection('payments')
               .where('kuriId', isEqualTo: widget.kuriId)
+              .where('monthKey', isEqualTo: monthKey) // ONLY fetch this month's data
               .snapshots(),
           builder: (context, pSnap) {
             if (!pSnap.hasData) return const Center(child: CircularProgressIndicator());

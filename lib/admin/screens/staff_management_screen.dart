@@ -219,9 +219,16 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
         centerTitle: true,
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('staff_admins').orderBy('name').snapshots(),
+        // 1. Added .limit(20) to the query to restrict total reads
+        stream: FirebaseFirestore.instance
+            .collection('staff_admins')
+            .orderBy('name')
+            .limit(15)
+            .snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+          // 2. Existing logic to get docs remains the same
           final docs = snapshot.data!.docs;
 
           if (docs.isEmpty) return const Center(child: Text("No active staff found"));
@@ -230,6 +237,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             itemCount: docs.length,
             itemBuilder: (context, i) {
+              // 3. All your existing data mapping and role logic preserved
               final data = docs[i].data() as Map<String, dynamic>;
               final role = data['role'] ?? 'Admin';
 
@@ -252,6 +260,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
                   trailing: isSuper ? Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // 4. Your existing edit/delete functions remain intact
                       IconButton(icon: const Icon(Icons.edit, size: 18, color: Colors.blue), onPressed: () => _showStaffForm(docId: docs[i].id, existingData: data)),
                       IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.redAccent), onPressed: () => _confirmDelete(docs[i].id, data)),
                     ],

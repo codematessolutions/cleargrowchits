@@ -1,3 +1,4 @@
+import 'package:cleargrowchits/admin/screens/winner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'companyfinance.dart';
@@ -217,6 +218,20 @@ class _AdminHomeState extends State<AdminHome> {
                           userId: widget.userId,
                           userName: widget.userName,
                           userRole: widget.userRole
+                      )
+                  )
+              ),
+            ),
+            _webActionCard(
+              "Winners",
+              "",
+              Icons.wine_bar,
+              Colors.deepPurpleAccent,
+                  () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => WinnerScreen( // You will create this screen next
+
                       )
                   )
               ),
