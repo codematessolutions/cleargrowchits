@@ -513,93 +513,281 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Existing logic
-    bool isFullyPaid = totalEntered >= widget.fullAmount;
-    bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
-
-    // 2. NEW VALIDATION: Check if amount exceeds target
-    bool isOverPaid = totalEntered > widget.fullAmount;
-
-    bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
-
-    // 3. UPDATED: Added !isOverPaid to the final check
-    bool isComplete = (isFullyPaid || isPartial) && !isOverPaid && areFieldsFilled && !_isSaving;
-
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: Container(
-        width: 850,
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 20), // Better for mobile
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          bool isMobile = constraints.maxWidth < 600;
+
+          // Original logic preserved
+          bool isFullyPaid = totalEntered >= widget.fullAmount;
+          bool isPartial = totalEntered > 0 && totalEntered < widget.fullAmount;
+          bool isOverPaid = totalEntered > widget.fullAmount;
+          bool areFieldsFilled = !splits.any((s) => s['collectorId'] == null || s['mode'] == null || s['amount'] <= 0);
+          bool isComplete = (isFullyPaid || isPartial) && !isOverPaid && areFieldsFilled && !_isSaving;
+
+          return Container(
+            width: isMobile ? double.infinity : 850,
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildHeader(isMobile),
+
+                // Hide header text on mobile to save space
+                if (!isMobile)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
+                    child: Row(
+                      children: [
+                        _headerTxt("DATE", 130), const SizedBox(width: 8),
+                        _headerTxt("AMOUNT", 110), const SizedBox(width: 8),
+                        Expanded(child: _headerTxt("PAYMENT MODE", 0)), const SizedBox(width: 8),
+                        Expanded(child: _headerTxt("COLLECTOR", 0)), const SizedBox(width: 48),
+                      ],
+                    ),
+                  ),
+
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32),
+                    child: Column(
+                      children: splits.asMap().entries.map((entry) =>
+                      isMobile ? _buildMobileSplitCard(entry.key) : _buildSplitRow(entry.key)
+                      ).toList(),
+                    ),
+                  ),
+                ),
+
+                _buildAddButton(isMobile),
+                _buildFooter(isFullyPaid, isComplete, isMobile),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- NEW: MOBILE SPLIT LAYOUT ---
+  Widget _buildMobileSplitCard(int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: _dateBox(index)),
+              const SizedBox(width: 8),
+              _deleteRowButton(index),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              SizedBox(
+                width: 120,
+                child: _inputWrapper(TextFormField(
+                  controller: _amountControllers[index],
+                  enabled: !_isSaving,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  decoration: const InputDecoration(prefixText: "₹ ", border: InputBorder.none, contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 12)),
+                  onChanged: (v) => setState(() => splits[index]['amount'] = double.tryParse(v) ?? 0.0),
+                )),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: _inputWrapper(DropdownButtonFormField<String>(
+                value: splits[index]['mode'],
+                isDense: true,
+                hint: const Text("Mode", style: TextStyle(fontSize: 12)),
+                decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 10)),
+                items: ["Cash", "GPay"].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)))).toList(),
+                onChanged: _isSaving ? null : (v) => setState(() => splits[index]['mode'] = v),
+              ))),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _inputWrapper(DropdownButtonFormField<String>(
+            value: splits[index]['collectorId'],
+            isDense: true,
+            hint: const Text("Select Collector", style: TextStyle(fontSize: 13)),
+            decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 12)),
+            items: widget.adminList.map((admin) {
+              return DropdownMenuItem<String>(
+                value: admin['id'],
+                child: Text(admin['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              );
+            }).toList(),
+            onChanged: _isSaving ? null : (v) => setState(() => splits[index]['collectorId'] = v),
+          )),
+        ],
+      ),
+    );
+  }
+
+  // --- UPDATED HEADER (Responsive) ---
+  Widget _buildHeader(bool isMobile) {
+    double remaining = widget.fullAmount - totalEntered;
+    bool isOverPaid = totalEntered > widget.fullAmount;
+
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: 20, horizontal: isMobile ? 16 : 32),
+      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.receipt_long_rounded, color: const Color(0xFF1E3A8A), size: isMobile ? 24 : 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text("${widget.memberName.toUpperCase()} (${widget.kuriNumber})",
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: isMobile ? 14 : 18), overflow: TextOverflow.ellipsis),
+                  Text(
+                      isOverPaid ? "⚠️ EXCEEDS LIMIT" : (remaining > 0 ? "Pending: ₹${remaining.toInt()}" : "Fully Settled"),
+                      style: TextStyle(fontSize: 11, color: isOverPaid ? Colors.purple : (remaining > 0 ? Colors.red : Colors.green), fontWeight: FontWeight.bold)
+                  ),
+                ]),
+              ),
+              if (!isMobile) ...[
+                const Spacer(),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text("Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                    Text("₹${totalEntered.toInt()}", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: isOverPaid ? Colors.red : const Color(0xFF1E3A8A))),
+                  ],
+                ),
+              ]
+            ],
+          ),
+          if (isMobile) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                Text("Total: ₹${totalEntered.toInt()}", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: isOverPaid ? Colors.red : const Color(0xFF1E3A8A))),
+              ],
+            )
+          ]
+        ],
+      ),
+    );
+  }
+
+  // --- UPDATED FOOTER (Responsive) ---
+  Widget _buildFooter(bool isFullyPaid, bool isComplete, bool isMobile) {
+    return Container(
+      padding: EdgeInsets.all(isMobile ? 16 : 32),
+      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(bottom: Radius.circular(24))),
+      child: Column(children: [
+        _buildSummaryBar(isFullyPaid),
+        const SizedBox(height: 20),
+        Flex(
+          direction: isMobile ? Axis.vertical : Axis.horizontal,
           children: [
-            _buildHeader(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
-              child: Row(
-                children: [
-                  _headerTxt("DATE", 130), const SizedBox(width: 8),
-                  _headerTxt("AMOUNT", 110), const SizedBox(width: 8),
-                  Expanded(child: _headerTxt("PAYMENT MODE", 0)), const SizedBox(width: 8),
-                  Expanded(child: _headerTxt("COLLECTOR", 0)), const SizedBox(width: 48),
-                ],
+            if (widget.initialSplits != null && widget.onDelete != null)
+              TextButton.icon(
+                onPressed: _isSaving ? null : _confirmGrandDelete,
+                icon: const Icon(Icons.delete_forever, color: Colors.red, size: 18),
+                label: const Text("DELETE", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12)),
               ),
+            if (!isMobile) const Spacer(),
+            Row(
+              mainAxisAlignment: isMobile ? MainAxisAlignment.spaceEvenly : MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+                  onPressed: isComplete ? () async {
+                    setState(() => _isSaving = true);
+                    await widget.onConfirm(splits, splits.first['date']);
+                  } : null,
+                  child: _isSaving
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Text("CONFIRM"),
+                ),
+              ],
             ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(children: splits.asMap().entries.map((entry) => _buildSplitRow(entry.key)).toList()),
-              ),
-            ),
-            _buildAddButton(),
-            _buildFooter(isFullyPaid, isComplete),
           ],
+        ),
+      ]),
+    );
+  }
+
+  // Helper additions for spacing/size adjustments
+  Widget _buildAddButton(bool isMobile) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 8),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _isSaving ? null : () {
+            double remaining = widget.fullAmount - totalEntered;
+            if (remaining < 0) remaining = 0;
+            setState(() {
+              splits.add({"mode": null, "amount": remaining, "collectorId": null, "date": DateTime.now()});
+              _amountControllers.add(TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : ""));
+            });
+          },
+          icon: const Icon(Icons.add_circle_outline, size: 18),
+          label: Text(isMobile ? "ADD SPLIT" : "PAY PENDING AMOUNT / ADD SPLIT", style: const TextStyle(fontSize: 12)),
         ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    double remaining = widget.fullAmount - totalEntered;
-    bool isOverPaid = totalEntered > widget.fullAmount; // NEW VALIDATION FLAG
-
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
-      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      child: Row(
-        children: [
-          const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
-          const SizedBox(width: 16),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text("${widget.memberName.toUpperCase()} (${widget.kuriNumber})", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-            Text(
-                isOverPaid
-                    ? "⚠️ EXCEEDS LIMIT: ₹${totalEntered.toInt()}" // NEW WARNING
-                    : (remaining > 0 ? "Pending Balance: ₹${remaining.toInt()}" : "Payment Fully Settled"),
-                style: TextStyle(
-                    fontSize: 12,
-                    color: isOverPaid ? Colors.purple : (remaining > 0 ? Colors.red : Colors.green),
-                    fontWeight: FontWeight.bold)
-            ),
-          ]),
-          const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text("Monthly Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              Text("₹${totalEntered.toInt()}",
-                  style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 24,
-                      color: isOverPaid ? Colors.red : const Color(0xFF1E3A8A) // COLOR CHANGE ON ERROR
-                  )
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+  // Widget _buildHeader() {
+  //   double remaining = widget.fullAmount - totalEntered;
+  //   bool isOverPaid = totalEntered > widget.fullAmount; // NEW VALIDATION FLAG
+  //
+  //   return Container(
+  //     padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 32),
+  //     decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+  //     child: Row(
+  //       children: [
+  //         const Icon(Icons.receipt_long_rounded, color: Color(0xFF1E3A8A), size: 28),
+  //         const SizedBox(width: 16),
+  //         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  //           Text("${widget.memberName.toUpperCase()} (${widget.kuriNumber})", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+  //           Text(
+  //               isOverPaid
+  //                   ? "⚠️ EXCEEDS LIMIT: ₹${totalEntered.toInt()}" // NEW WARNING
+  //                   : (remaining > 0 ? "Pending Balance: ₹${remaining.toInt()}" : "Payment Fully Settled"),
+  //               style: TextStyle(
+  //                   fontSize: 12,
+  //                   color: isOverPaid ? Colors.purple : (remaining > 0 ? Colors.red : Colors.green),
+  //                   fontWeight: FontWeight.bold)
+  //           ),
+  //         ]),
+  //         const Spacer(),
+  //         Column(
+  //           crossAxisAlignment: CrossAxisAlignment.end,
+  //           children: [
+  //             Text("Monthly Target: ₹${widget.fullAmount.toInt()}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+  //             Text("₹${totalEntered.toInt()}",
+  //                 style: TextStyle(
+  //                     fontWeight: FontWeight.w900,
+  //                     fontSize: 24,
+  //                     color: isOverPaid ? Colors.red : const Color(0xFF1E3A8A) // COLOR CHANGE ON ERROR
+  //                 )
+  //             ),
+  //           ],
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
 
   Widget _buildSplitRow(int index) {
     return Padding(
@@ -677,59 +865,59 @@ class _MarkPaymentDialogState extends State<MarkPaymentDialog> {
     ) : null);
   }
 
-  Widget _buildAddButton() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-      child: OutlinedButton.icon(
-        onPressed: _isSaving ? null : () {
-          double remaining = widget.fullAmount - totalEntered;
-          if (remaining < 0) remaining = 0;
-          setState(() {
-            splits.add({"mode": null, "amount": remaining, "collectorId": null, "date": DateTime.now()});
-            _amountControllers.add(TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : ""));
-          });
-        },
-        icon: const Icon(Icons.add_circle_outline),
-        label: const Text("PAY PENDING AMOUNT / ADD SPLIT"),
-      ),
-    );
-  }
-
-  Widget _buildFooter(bool isFullyPaid, bool isComplete) {
-    return Container(
-      padding: const EdgeInsets.all(32),
-      decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(bottom: Radius.circular(24))),
-      child: Column(children: [
-        _buildSummaryBar(isFullyPaid),
-        const SizedBox(height: 24),
-        Row(children: [
-          if (widget.initialSplits != null && widget.onDelete != null)
-            TextButton.icon(
-              onPressed: _isSaving ? null : _confirmGrandDelete,
-              icon: const Icon(Icons.delete_forever, color: Colors.red),
-              label: const Text("DELETE PAYMENT", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-            ),
-          const Spacer(),
-          TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
-          const SizedBox(width: 20),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E3A8A),
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: Colors.grey.shade300, // VISUAL FEEDBACK
-            ),
-            onPressed: isComplete ? () async {
-              setState(() => _isSaving = true);
-              await widget.onConfirm(splits, splits.first['date']);
-            } : null,
-            child: _isSaving
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Text("CONFIRM PAYMENT"),
-          ),
-        ]),
-      ]),
-    );
-  }
+  // Widget _buildAddButton() {
+  //   return Padding(
+  //     padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+  //     child: OutlinedButton.icon(
+  //       onPressed: _isSaving ? null : () {
+  //         double remaining = widget.fullAmount - totalEntered;
+  //         if (remaining < 0) remaining = 0;
+  //         setState(() {
+  //           splits.add({"mode": null, "amount": remaining, "collectorId": null, "date": DateTime.now()});
+  //           _amountControllers.add(TextEditingController(text: remaining > 0 ? remaining.toInt().toString() : ""));
+  //         });
+  //       },
+  //       icon: const Icon(Icons.add_circle_outline),
+  //       label: const Text("PAY PENDING AMOUNT / ADD SPLIT"),
+  //     ),
+  //   );
+  // }
+  //
+  // Widget _buildFooter(bool isFullyPaid, bool isComplete) {
+  //   return Container(
+  //     padding: const EdgeInsets.all(32),
+  //     decoration: const BoxDecoration(color: Color(0xFFF8FAFC), borderRadius: BorderRadius.vertical(bottom: Radius.circular(24))),
+  //     child: Column(children: [
+  //       _buildSummaryBar(isFullyPaid),
+  //       const SizedBox(height: 24),
+  //       Row(children: [
+  //         if (widget.initialSplits != null && widget.onDelete != null)
+  //           TextButton.icon(
+  //             onPressed: _isSaving ? null : _confirmGrandDelete,
+  //             icon: const Icon(Icons.delete_forever, color: Colors.red),
+  //             label: const Text("DELETE PAYMENT", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+  //           ),
+  //         const Spacer(),
+  //         TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text("CANCEL")),
+  //         const SizedBox(width: 20),
+  //         ElevatedButton(
+  //           style: ElevatedButton.styleFrom(
+  //             backgroundColor: const Color(0xFF1E3A8A),
+  //             foregroundColor: Colors.white,
+  //             disabledBackgroundColor: Colors.grey.shade300, // VISUAL FEEDBACK
+  //           ),
+  //           onPressed: isComplete ? () async {
+  //             setState(() => _isSaving = true);
+  //             await widget.onConfirm(splits, splits.first['date']);
+  //           } : null,
+  //           child: _isSaving
+  //               ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+  //               : const Text("CONFIRM PAYMENT"),
+  //         ),
+  //       ]),
+  //     ]),
+  //   );
+  // }
 
   Widget _buildSummaryBar(bool isFullyPaid) {
     double remaining = widget.fullAmount - totalEntered;
