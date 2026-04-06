@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
@@ -51,6 +52,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
   final ScrollController _verticalScroll = ScrollController();
   final ScrollController _horizontalScroll = ScrollController();
+  final ScrollController _monthScrollController = ScrollController();
   late TextEditingController _nameController;
   late TextEditingController _numberController;
 
@@ -110,35 +112,34 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     }
 
     try {
+      // 1. BASE QUERY
       Query query = FirebaseFirestore.instance
           .collection('enrollments')
           .where('kuriId', isEqualTo: widget.kuriId);
 
-      // 1. PRIORITIZE KURI NUMBER SEARCH (Exact or Prefix)
+      // 2. APPLY SEARCH LOGIC (Prioritizing Kuri Number over Name)
       if (kuriNumberQuery.isNotEmpty) {
-        // padLeft ensures "1" matches "001" if that's how you store it
         String formattedNum = kuriNumberQuery.padLeft(3, '0');
         query = query
             .where('kuriNumber', isGreaterThanOrEqualTo: formattedNum)
             .where('kuriNumber', isLessThanOrEqualTo: '$formattedNum\uf8ff')
             .orderBy('kuriNumber');
-      }
-      // 2. FALLBACK TO NAME SEARCH
-      else if (searchQuery.isNotEmpty) {
+      } else if (searchQuery.isNotEmpty) {
         String searchUpper = searchQuery.toUpperCase();
         query = query
             .where('name', isGreaterThanOrEqualTo: searchUpper)
             .where('name', isLessThanOrEqualTo: '$searchUpper\uf8ff')
             .orderBy('name');
-      }
-      // 3. DEFAULT SORTING
-      else {
+      } else {
+        // DEFAULT SORTING
         query = query.orderBy('kuriNumber', descending: false);
       }
 
-      const int fetchLimit = 20;
+      // 3. PAGINATION LIMIT
+      const int fetchLimit = 30;
       query = query.limit(fetchLimit);
 
+      // 4. START AFTER LAST DOCUMENT IF LOADING MORE
       if (_lastDocument != null && !isInitial) {
         query = query.startAfterDocument(_lastDocument!);
       }
@@ -153,8 +154,11 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             _allMembers.addAll(snap.docs);
           }
 
+          // Update pagination trackers
           _hasMore = snap.docs.length == fetchLimit;
-          if (snap.docs.isNotEmpty) _lastDocument = snap.docs.last;
+          if (snap.docs.isNotEmpty) {
+            _lastDocument = snap.docs.last;
+          }
 
           _isLoading = false;
           _isLoadingMore = false;
@@ -212,83 +216,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
-  // --- UI COMPONENTS ---
-
-  // Widget _buildDetailRibbon() {
-  //   final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-  //
-  //   return StreamBuilder<DocumentSnapshot>(
-  //     stream: FirebaseFirestore.instance.collection('kuris').doc(widget.kuriId).snapshots(),
-  //     builder: (context, kSnap) {
-  //       if (!kSnap.hasData) return const SizedBox(height: 35);
-  //       var kuriData = kSnap.data!.data() as Map<String, dynamic>;
-  //
-  //       // Format Start and End Dates
-  //       String startStr = kuriData['startMonth'] != null
-  //           ? DateFormat('MMM yy').format((kuriData['startMonth'] as Timestamp).toDate())
-  //           : "-";
-  //       String endStr = kuriData['endMonth'] != null
-  //           ? DateFormat('MMM yy').format((kuriData['endMonth'] as Timestamp).toDate())
-  //           : "-";
-  //
-  //       return StreamBuilder<QuerySnapshot>(
-  //         stream: FirebaseFirestore.instance.collection('enrollments').where('kuriId', isEqualTo: widget.kuriId).snapshots(),
-  //         builder: (context, mSnap) {
-  //           return StreamBuilder<QuerySnapshot>(
-  //             stream: FirebaseFirestore.instance.collection('payments')
-  //                 .where('kuriId', isEqualTo: widget.kuriId)
-  //                 .where('monthKey', isEqualTo: monthKey).snapshots(),
-  //             builder: (context, pSnap) {
-  //               final totalMembers = mSnap.data?.docs.length ?? 0;
-  //               final paidMembers = pSnap.data?.docs.length ?? 0;
-  //
-  //               return Container(
-  //                 height: 35, width: double.infinity, color: SchemeTheme.primaryBlue,
-  //                 child: SingleChildScrollView(
-  //                   scrollDirection: Axis.horizontal,
-  //                   padding: const EdgeInsets.symmetric(horizontal: 10),
-  //                   child: Row(
-  //                     children: [
-  //                       _compactItem("KURI", widget.kuriName.toUpperCase(), isTitle: true),
-  //
-  //
-  //                       _vDivider(),
-  //                       _compactItem("COLLECTION", "$paidMembers/$totalMembers PAID", isSpecial: true),
-  //                       _vDivider(),
-  //                       _compactItem("DRAW DATE", kuriData['kuriDate']?.toString() ?? ""),
-  //                       _vDivider(),
-  //                       // Added Start and End Dates at the end
-  //                       _compactItem("START", startStr),
-  //                       _vDivider(),
-  //                       _compactItem("END", endStr),
-  //                       _vDivider(),
-  //                       ElevatedButton.icon(
-  //                         onPressed: _isLoading ? null : () async {
-  //                           await _generateFullKuriPDF();
-  //                         },
-  //                         icon: _isLoading
-  //                             ? const SizedBox(width: 10, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-  //                             : const Icon(Icons.download_rounded, size: 18),
-  //                         label: const Text("PDF"),
-  //                         style: ElevatedButton.styleFrom(
-  //                           backgroundColor: Colors.blueAccent,
-  //                           foregroundColor: Colors.white,
-  //                           // padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-  //                           elevation: 2,
-  //                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-  //                         ),
-  //                       )
-  //                     ],
-  //                   ),
-  //                 ),
-  //               );
-  //             },
-  //           );
-  //         },
-  //       );
-  //     },
-  //   );
-  // }
   Widget _buildDetailRibbon() {
     final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
 
@@ -477,7 +404,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       height: 40,
-      // On Web, give it a fixed width if not expanded to prevent layout issues
       width: isExpanded ? null : 120,
       decoration: BoxDecoration(
         color: Colors.grey.shade50,
@@ -487,8 +413,13 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: selectedStatus,
-          isExpanded: true, // Always true inside the Container to fill the 120dp or Expanded space
-          onChanged: (val) => setState(() => selectedStatus = val!),
+          isExpanded: true,
+          // Logic: No change to logic, but adding a check to prevent unnecessary rebuilds
+          onChanged: (val) {
+            if (val != null && val != selectedStatus) {
+              setState(() => selectedStatus = val);
+            }
+          },
           items: ["All", "Paid", "Pending"]
               .map((s) => DropdownMenuItem(
               value: s,
@@ -598,59 +529,82 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
         color: Colors.grey.shade50,
         border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
       ),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        itemCount: allMonths.length,
-        itemBuilder: (context, index) {
-          DateTime m = allMonths[index];
-          bool isSelected = m.year == selectedMonth.year && m.month == selectedMonth.month;
+      // ScrollConfiguration allows mouse dragging
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(
+          dragDevices: {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.trackpad,
+          },
+        ),
+        child: Listener(
+          // This intercepts the mouse wheel signal
+          onPointerSignal: (pointerSignal) {
+            if (pointerSignal is PointerScrollEvent) {
+              final newOffset = _monthScrollController.offset + pointerSignal.scrollDelta.dy;
+              _monthScrollController.jumpTo(
+                newOffset.clamp(0.0, _monthScrollController.position.maxScrollExtent),
+              );
+            }
+          },
+          child: ListView.builder(
+            controller: _monthScrollController, // Attach the controller
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(), // Better feel for Web
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            itemCount: allMonths.length,
+            itemBuilder: (context, index) {
+              DateTime m = allMonths[index];
+              bool isSelected = m.year == selectedMonth.year && m.month == selectedMonth.month;
 
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: InkWell(
-              onTap: () => setState(() => selectedMonth = m),
-              borderRadius: BorderRadius.circular(30),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: isSelected ? SchemeTheme.primaryBlue : Colors.white,
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: InkWell(
+                  onTap: () => setState(() => selectedMonth = m),
                   borderRadius: BorderRadius.circular(30),
-                  boxShadow: isSelected
-                      ? [BoxShadow(color: SchemeTheme.primaryBlue.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
-                      : [],
-                  border: Border.all(
-                    color: isSelected ? SchemeTheme.primaryBlue : Colors.grey.shade300,
-                    width: 1,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: isSelected ? SchemeTheme.primaryBlue : Colors.white,
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: isSelected
+                          ? [BoxShadow(color: SchemeTheme.primaryBlue.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 4))]
+                          : [],
+                      border: Border.all(
+                        color: isSelected ? SchemeTheme.primaryBlue : Colors.grey.shade300,
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Text(
+                          DateFormat('MMM').format(m).toUpperCase(),
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isSelected ? Colors.white : Colors.black87
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          DateFormat('yy').format(m),
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400,
+                              color: isSelected ? Colors.white70 : Colors.grey
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Text(
-                      DateFormat('MMM').format(m).toUpperCase(),
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: isSelected ? Colors.white : Colors.black87
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      DateFormat('yy').format(m),
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w400,
-                          color: isSelected ? Colors.white70 : Colors.grey
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -663,7 +617,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     return Expanded(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Threshold for mobile view
           bool isMobile = constraints.maxWidth < 800;
 
           return StreamBuilder<QuerySnapshot>(
@@ -677,14 +630,20 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
 
               final currentMonthPayments = pSnap.data!.docs;
 
-              // --- OPTIMIZATION: PRE-GROUP DATA ---
+              // --- OPTIMIZATION: PRE-GROUP DATA & CREATE LOOKUP SET ---
               Map<String, Map<String, dynamic>> currentMonthPaidMap = {};
+              // Using a Set for the "Paid" check makes the filter logic nearly instant
+              Set<String> paidMemberIds = {};
+
               for (var doc in currentMonthPayments) {
                 final data = doc.data() as Map<String, dynamic>;
-                currentMonthPaidMap[data['memberId'].toString()] = {
+                final String mId = data['memberId'].toString();
+
+                currentMonthPaidMap[mId] = {
                   ...data,
                   'id': doc.id,
                 };
+                paidMemberIds.add(mId);
               }
 
               bool anyWinnerThisMonth = _allMembers.any((m) {
@@ -692,13 +651,15 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                 return data['winnerMonth'] == monthKey;
               });
 
+              // --- EFFICIENT FILTERING ---
               final List<dynamic> memberPool = _allMembers;
               List<dynamic> filteredList = memberPool.where((mDoc) {
                 final mid = mDoc.id;
-                final isPaid = currentMonthPaidMap.containsKey(mid);
-                if (selectedStatus == "Paid" && !isPaid) return false;
-                if (selectedStatus == "Pending" && isPaid) return false;
-                return true;
+                final bool isPaid = paidMemberIds.contains(mid); // O(1) Lookup
+
+                if (selectedStatus == "Paid") return isPaid;
+                if (selectedStatus == "Pending") return !isPaid;
+                return true; // "All"
               }).toList();
 
               // --- VIEW SWITCHER ---
@@ -915,6 +876,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
           child: Scrollbar(
             controller: _horizontalScroll,
             thumbVisibility: true,
+
             notificationPredicate: (notif) => notif.depth == 1,
             child: SingleChildScrollView(
               controller: _horizontalScroll,

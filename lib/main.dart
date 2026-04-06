@@ -62,6 +62,7 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
       ),
 
+
       // --- ADD THESE LINES TO FIX DATE FORMAT GLOBALLY ---
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
