@@ -338,6 +338,7 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                     await _generateFullKuriPDF();
                     // await  migrateMemberTotals();
                     // await migratePaymentDetails();
+                    // await getCollectionLog();
 
                   },
                   icon: _isLoading
@@ -654,594 +655,6 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     );
   }
 
-  // Widget _buildMemberTableContent() {
-  //   if (_isLoading) return const Expanded(child: Center(child: CircularProgressIndicator()));
-  //
-  //   final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-  //
-  //   return Expanded(
-  //     child: ScrollConfiguration(
-  //       behavior: ScrollConfiguration.of(context).copyWith(
-  //         dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse, PointerDeviceKind.trackpad},
-  //       ),
-  //       child: StreamBuilder<QuerySnapshot>(
-  //         stream: FirebaseFirestore.instance
-  //             .collection('payments')
-  //             .where('kuriId', isEqualTo: widget.kuriId)
-  //             // .where('monthKey', isEqualTo: monthKey) // ONLY fetch this month's data
-  //             .snapshots(),
-  //         builder: (context, pSnap) {
-  //           if (!pSnap.hasData) return const Center(child: CircularProgressIndicator());
-  //
-  //           final allPayments = pSnap.data!.docs;
-  //
-  //           // Map for current month payments
-  //           Map<String, Map<String, dynamic>> currentMonthPaidMap = {
-  //             for (var doc in allPayments.where((p) => p['monthKey'] == monthKey))
-  //               doc['memberId'].toString(): {
-  //                 ...doc.data() as Map<String, dynamic>,
-  //                 'id': doc.id,
-  //               }
-  //           };
-  //
-  //           // --- STRICT LOCK: Check if ANY member is already the winner for THIS month ---
-  //           bool anyWinnerThisMonth = _allMembers.any((m) {
-  //             final data = m.data() as Map<String, dynamic>;
-  //             return data['winnerMonth'] == monthKey;
-  //           });
-  //
-  //           final List<dynamic> memberPool = _allMembers; // Use a dynamic proxy
-  //           List<dynamic> filteredList = memberPool.where((mDoc) {
-  //             final mid = mDoc.id;
-  //             final isPaid = currentMonthPaidMap.containsKey(mid);
-  //             if (selectedStatus == "Paid" && !isPaid) return false;
-  //             if (selectedStatus == "Pending" && isPaid) return false;
-  //             return true;
-  //           }).toList();
-  //
-  //           return Column(
-  //             children: [
-  //               Expanded(
-  //                 child: Scrollbar(
-  //                   controller: _verticalScroll,
-  //                   thumbVisibility: true,
-  //                   child: SingleChildScrollView(
-  //                     controller: _verticalScroll,
-  //                     physics: const AlwaysScrollableScrollPhysics(),
-  //                     child: Scrollbar(
-  //                       controller: _horizontalScroll,
-  //                       thumbVisibility: true,
-  //                       notificationPredicate: (notif) => notif.depth == 1,
-  //                       child: SingleChildScrollView(
-  //                         controller: _horizontalScroll,
-  //                         scrollDirection: Axis.horizontal,
-  //                         physics: const BouncingScrollPhysics(),
-  //                         child: ConstrainedBox(
-  //                           constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width),
-  //                           child: DataTable(
-  //                             headingRowHeight: 45,
-  //                             dataRowMaxHeight: 60,
-  //                             columnSpacing: 25,
-  //                             headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-  //                             border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
-  //                             columns: const [
-  //                               DataColumn(label: Text("K.NO")),
-  //                               DataColumn(label: Text("NAME & PHONE")),
-  //                               DataColumn(label: Text("PLACE")),
-  //                               DataColumn(label: Text("START\nMONTH")),
-  //                               DataColumn(label: Text("MONTHLY")),
-  //                               DataColumn(label: Text("INST")),
-  //                               DataColumn(label: Text("PAID")),
-  //                               DataColumn(label: Text("BAL")),
-  //                               DataColumn(label: Text("STATUS")),
-  //                               DataColumn(label: Text("DATE")),
-  //                               DataColumn(label: Text("MODE & SPLITS")),
-  //                               DataColumn(label: Text("COLLECTOR")),
-  //                               DataColumn(label: Text("ENTRY")),
-  //                               DataColumn(label: Text("ACTION")),
-  //                             ],
-  //                             rows: filteredList.map((m) {
-  //                               int masterIndex = _allMembers.indexWhere((DocumentSnapshot element) => element.id == m.id);
-  //
-  //                               // 2. FIX: Cast the result explicitly to DocumentSnapshot
-  //                               final DocumentSnapshot currentMemberDoc = (masterIndex != -1)
-  //                                   ? _allMembers[masterIndex]
-  //                                   : m;
-  //
-  //                               // 3. Ensure data is cast correctly
-  //                               final d = currentMemberDoc.data() as Map<String, dynamic>? ?? {};
-  //                               final mid = currentMemberDoc.id;
-  //
-  //                               // Payment Data for current month
-  //                               final bool hasPaymentDoc = currentMonthPaidMap.containsKey(mid);
-  //                               final pMonth = hasPaymentDoc ? currentMonthPaidMap[mid] : null;
-  //
-  //                               // Determine if it's Fully Paid or Partial
-  //                               final String paymentStatus = pMonth?['status'] ?? "Pending";
-  //                               final bool isFullyPaid = paymentStatus == "Fully Paid";
-  //
-  //                               double monthlyAmount = _parseNum(d['monthlyAmount']);
-  //                               int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
-  //                               String? winnerMonth = d['winnerMonth'];
-  //                               bool hasWonInThisMonth = winnerMonth == monthKey;
-  //
-  //                               bool wonInPast = false;
-  //                               if (winnerMonth != null && winnerMonth != monthKey) {
-  //                                 List<String> currentParts = monthKey.split('_');
-  //                                 List<String> winParts = winnerMonth.split('_');
-  //                                 int cY = int.parse(currentParts[0]), cM = int.parse(currentParts[1]);
-  //                                 int wY = int.parse(winParts[0]), wM = int.parse(winParts[1]);
-  //                                 if (wY < cY || (wY == cY && wM < cM)) wonInPast = true;
-  //                               }
-  //
-  //                               // Calculation Logic
-  //                               final mPayments = allPayments.where((p) => p['memberId'] == mid).toList();
-  //                               int displayPaidCount = mPayments.length;
-  //                               int displayTotalCount = (winnerMonth != null) ? mPayments.length : totalMonths;
-  //
-  //                               // sum of 'collectedTotal' (or 'amount' if old records)
-  //                               double totalPaidSoFar = mPayments.fold(0.0, (sum, p) {
-  //                                 var pData = p.data() as Map<String, dynamic>;
-  //                                 return sum + _parseNum(pData['collectedTotal'] ?? pData['amount']);
-  //                               });
-  //
-  //                               double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaidSoFar;
-  //
-  //                               return DataRow(
-  //                                 color: WidgetStateProperty.resolveWith<Color?>((states) {
-  //                                   if (hasWonInThisMonth) return Colors.amber.shade100;
-  //                                   if (wonInPast) return Colors.green.shade50;
-  //                                   return null;
-  //                                 }),
-  //                                 cells: [
-  //                                   DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontWeight: FontWeight.bold))),
-  //                                   DataCell(SizedBox(
-  //                                     width: 150,
-  //                                     child: Column(
-  //                                       crossAxisAlignment: CrossAxisAlignment.start,
-  //                                       mainAxisAlignment: MainAxisAlignment.center,
-  //                                       children: [
-  //                                         Text(d['name'].toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-  //                                         Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 10, color: Colors.grey)),
-  //                                       ],
-  //                                     ),
-  //                                   )),
-  //                                   DataCell(Text(d['place']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text(d['joiningMonth']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text("$displayPaidCount/$displayTotalCount",
-  //                                       style: TextStyle(
-  //                                         fontSize: 11,
-  //                                         fontWeight: (winnerMonth != null) ? FontWeight.bold : FontWeight.normal,
-  //                                         color: (winnerMonth != null) ? Colors.blue.shade900 : Colors.black,
-  //                                       ))),
-  //                                   DataCell(Text(currencyFormat.format(totalPaidSoFar), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-  //                                   DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance),
-  //                                       style: TextStyle(color: balance > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-  //
-  //                                   // --- UPDATED STATUS BADGE ---
-  //                                   DataCell(_buildStatusBadge(hasPaymentDoc, pMonth, winnerMonth)),
-  //
-  //                                   DataCell(Padding(
-  //                                     padding: const EdgeInsets.symmetric(vertical: 4.0),
-  //                                     child: Builder(builder: (context) {
-  //                                       if (!hasPaymentDoc || pMonth == null) return const Text("-");
-  //
-  //                                       final splits = pMonth['paymentSplits'] as List?;
-  //
-  //                                       // 1. Get unique formatted dates
-  //                                       List<String> formattedDates = [];
-  //                                       if (splits != null && splits.isNotEmpty) {
-  //                                         formattedDates = splits.map((s) {
-  //                                           final splitDate = s['date'];
-  //                                           if (splitDate is Timestamp) {
-  //                                             return DateFormat('dd-MM-yy').format(splitDate.toDate());
-  //                                           }
-  //                                           return splitDate?.toString() ?? "";
-  //                                         }).where((d) => d.isNotEmpty).toSet().toList();
-  //                                       } else if (pMonth['paidDate'] is Timestamp) {
-  //                                         formattedDates = [DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate())];
-  //                                       }
-  //
-  //                                       if (formattedDates.isEmpty) return const Text("-");
-  //
-  //                                       // 2. Return a Column for vertical stacking
-  //                                       return Column(
-  //                                         mainAxisAlignment: MainAxisAlignment.center,
-  //                                         crossAxisAlignment: CrossAxisAlignment.start,
-  //                                         children: formattedDates.map((dateStr) => Text(
-  //                                           dateStr,
-  //                                           style: const TextStyle(
-  //                                             fontSize: 10, // Smaller font for multiple lines
-  //                                             color: Colors.blueGrey,
-  //                                             fontWeight: FontWeight.w600,
-  //                                             height: 1.2, // Tighter line height
-  //                                           ),
-  //                                         )).toList(),
-  //                                       );
-  //                                     }),
-  //                                   )),
-  //                                   DataCell(hasPaymentDoc ? Column(
-  //                                     mainAxisAlignment: MainAxisAlignment.center,
-  //                                     crossAxisAlignment: CrossAxisAlignment.start,
-  //                                     children: [
-  //                                       Text(pMonth!['mode']?.toString() ?? "-", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.purple)),
-  //                                       if (pMonth['splitAmounts'] != null && pMonth['splitAmounts'].toString().isNotEmpty)
-  //                                         Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
-  //                                     ],
-  //                                   ) : const Text("-")),
-  //                                   DataCell(Text(hasPaymentDoc ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 12, color: Colors.teal))),
-  //                                   DataCell(hasPaymentDoc ? Column(
-  //                                     mainAxisAlignment: MainAxisAlignment.center,
-  //                                     crossAxisAlignment: CrossAxisAlignment.start,
-  //                                     children: [
-  //                                       Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize:10, fontWeight: FontWeight.bold, color: Colors.brown)),
-  //                                       if (pMonth['paidAt'] != null)
-  //                                         Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 9, color: Colors.grey)),
-  //                                     ],
-  //                                   ) : const Text("-")),
-  //                                   DataCell(Row(
-  //                                     mainAxisSize: MainAxisSize.min,
-  //                                     children: [
-  //                                       if (wonInPast) ...[
-  //                                         const Icon(Icons.check_circle, color: Colors.green, size: 20),
-  //                                       ] else ...[
-  //                                         if (hasPaymentDoc)
-  //                                           IconButton(
-  //                                             padding: EdgeInsets.zero,
-  //                                             constraints: const BoxConstraints(),
-  //                                             icon: const Icon(Icons.edit_calendar, color: Colors.orange, size: 18),
-  //                                             onPressed: () => _showMarkPaymentDialog(
-  //                                               mid, d['name'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount,
-  //                                               existingPayment: pMonth,
-  //                                             ),
-  //                                           )
-  //                                         else
-  //                                           _buildPayButton(mid, d['name'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount),
-  //
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
-  //                                           onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
-  //                                         ),
-  //
-  //                                         // --- WINNER BUTTON LOCK: Only show if FULLY PAID ---
-  //                                         if (hasWonInThisMonth)
-  //                                           const Icon(Icons.stars, color: Colors.orange, size: 22)
-  //                                         else if (!anyWinnerThisMonth)
-  //                                           IconButton(
-  //                                             padding: EdgeInsets.zero,
-  //                                             constraints: const BoxConstraints(),
-  //                                             // Icon is grey if not fully paid
-  //                                             icon: Icon(Icons.emoji_events_outlined,
-  //                                                 color: isFullyPaid ? Colors.blue : Colors.grey.shade300),
-  //                                             onPressed: isFullyPaid
-  //                                                 ? () => _markAsWinner(mid, d['name'], true, pMonth)
-  //                                                 : () => ScaffoldMessenger.of(context).showSnackBar(
-  //                                                 const SnackBar(content: Text("Partial payments cannot enter the draw!"))),
-  //                                           ),
-  //                                       ],
-  //
-  //                                       if (widget.userRole == 'Super Admin' && !wonInPast) ...[
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
-  //                                           onPressed: () => _showEditEnrollmentDialog(currentMemberDoc),
-  //                                         ),
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
-  //                                           onPressed: () => _confirmDeleteEnrollment(m.id, d),
-  //                                         ),
-  //                                       ],
-  //                                     ],
-  //                                   )),
-  //                                 ],
-  //                               );
-  //                             }).toList(),
-  //                           ),
-  //                         ),
-  //                       ),
-  //                     ),
-  //                   ),
-  //                 ),
-  //               ),
-  //             ],
-  //           );
-  //         },
-  //       ),
-  //     ),
-  //   );
-  // }
-
-  // above old code
-
-  // Widget _buildMemberTableContent() {
-  //   if (_isLoading) return const Expanded(child: Center(child: CircularProgressIndicator()));
-  //
-  //   final currencyFormat = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
-  //
-  //   return Expanded(
-  //     child: ScrollConfiguration(
-  //       behavior: ScrollConfiguration.of(context).copyWith(
-  //         dragDevices: {PointerDeviceKind.touch, PointerDeviceKind.mouse, PointerDeviceKind.trackpad},
-  //       ),
-  //       child: StreamBuilder<QuerySnapshot>(
-  //         stream: FirebaseFirestore.instance
-  //             .collection('payments')
-  //             .where('kuriId', isEqualTo: widget.kuriId)
-  //             .where('monthKey', isEqualTo: monthKey) // REDUCES BILLING: Only fetch this month
-  //             .snapshots(),
-  //         builder: (context, pSnap) {
-  //           if (!pSnap.hasData) return const Center(child: CircularProgressIndicator());
-  //
-  //           final currentMonthPayments = pSnap.data!.docs;
-  //
-  //           // --- OPTIMIZATION: PRE-GROUP DATA ONCE ---
-  //           // This replaces the nested .where inside the rows, making it much faster.
-  //           Map<String, Map<String, dynamic>> currentMonthPaidMap = {};
-  //           for (var doc in currentMonthPayments) {
-  //             final data = doc.data() as Map<String, dynamic>;
-  //             currentMonthPaidMap[data['memberId'].toString()] = {
-  //               ...data,
-  //               'id': doc.id,
-  //             };
-  //           }
-  //
-  //           // --- STRICT LOCK: Check if ANY member is already the winner for THIS month ---
-  //           bool anyWinnerThisMonth = _allMembers.any((m) {
-  //             final data = m.data() as Map<String, dynamic>;
-  //             return data['winnerMonth'] == monthKey;
-  //           });
-  //
-  //           final List<dynamic> memberPool = _allMembers;
-  //           List<dynamic> filteredList = memberPool.where((mDoc) {
-  //             final mid = mDoc.id;
-  //             final isPaid = currentMonthPaidMap.containsKey(mid);
-  //             if (selectedStatus == "Paid" && !isPaid) return false;
-  //             if (selectedStatus == "Pending" && isPaid) return false;
-  //             return true;
-  //           }).toList();
-  //
-  //           return Column(
-  //             children: [
-  //               Expanded(
-  //                 child: Scrollbar(
-  //                   controller: _verticalScroll,
-  //                   thumbVisibility: true,
-  //                   child: SingleChildScrollView(
-  //                     controller: _verticalScroll,
-  //                     physics: const AlwaysScrollableScrollPhysics(),
-  //                     child: Scrollbar(
-  //                       controller: _horizontalScroll,
-  //                       thumbVisibility: true,
-  //                       notificationPredicate: (notif) => notif.depth == 1,
-  //                       child: SingleChildScrollView(
-  //                         controller: _horizontalScroll,
-  //                         scrollDirection: Axis.horizontal,
-  //                         physics: const BouncingScrollPhysics(),
-  //                         child: ConstrainedBox(
-  //                           constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width),
-  //                           child: DataTable(
-  //                             headingRowHeight: 45,
-  //                             dataRowMaxHeight: 60,
-  //                             columnSpacing: 25,
-  //                             headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-  //                             border: TableBorder.all(color: Colors.grey.shade300, width: 0.5),
-  //                             columns: const [
-  //                               DataColumn(label: Text("K.NO")),
-  //                               DataColumn(label: Text("NAME & PHONE")),
-  //                               DataColumn(label: Text("PLACE")),
-  //                               DataColumn(label: Text("START\nMONTH")),
-  //                               DataColumn(label: Text("MONTHLY")),
-  //                               DataColumn(label: Text("INST")),
-  //                               DataColumn(label: Text("PAID")),
-  //                               DataColumn(label: Text("BAL")),
-  //                               DataColumn(label: Text("STATUS")),
-  //                               DataColumn(label: Text("DATE")),
-  //                               DataColumn(label: Text("MODE & SPLITS")),
-  //                               DataColumn(label: Text("COLLECTOR")),
-  //                               DataColumn(label: Text("ENTRY")),
-  //                               DataColumn(label: Text("ACTION")),
-  //                             ],
-  //                             rows: filteredList.map((m) {
-  //                               // We use the ID to find the member in the master list
-  //                               int masterIndex = _allMembers.indexWhere((element) => element.id == m.id);
-  //                               final DocumentSnapshot currentMemberDoc = (masterIndex != -1) ? _allMembers[masterIndex] : m;
-  //
-  //                               final d = currentMemberDoc.data() as Map<String, dynamic>? ?? {};
-  //                               final mid = currentMemberDoc.id;
-  //
-  //                               // Payment Data for current month - INSTANT LOOKUP
-  //                               final pMonth = currentMonthPaidMap[mid];
-  //                               final bool hasPaymentDoc = pMonth != null;
-  //
-  //                               final String paymentStatus = pMonth?['status'] ?? "Pending";
-  //                               final bool isFullyPaid = paymentStatus == "Fully Paid";
-  //
-  //                               double monthlyAmount = _parseNum(d['monthlyAmount']);
-  //                               int totalMonths = int.tryParse(d['totalMonths']?.toString() ?? '0') ?? 0;
-  //                               String? winnerMonth = d['winnerMonth'];
-  //                               bool hasWonInThisMonth = winnerMonth == monthKey;
-  //
-  //                               bool wonInPast = false;
-  //                               if (winnerMonth != null && winnerMonth != monthKey) {
-  //                                 List<String> currentParts = monthKey.split('_');
-  //                                 List<String> winParts = winnerMonth.split('_');
-  //                                 int cY = int.parse(currentParts[0]), cM = int.parse(currentParts[1]);
-  //                                 int wY = int.parse(winParts[0]), wM = int.parse(winParts[1]);
-  //                                 if (wY < cY || (wY == cY && wM < cM)) wonInPast = true;
-  //                               }
-  //
-  //                               // --- COST SAVING LOGIC ---
-  //                               // We use 'totalPaid' field from the Member document directly.
-  //                               // Make sure your save function uses FieldValue.increment('totalPaid')
-  //                               double totalPaidSoFar = _parseNum(d['totalPaid']);
-  //
-  //                               // Use payment count if you have it in member doc, or assume current month if paid
-  //                               int displayPaidCount = int.tryParse(d['paidMonthsCount']?.toString() ?? '0') ?? (hasPaymentDoc ? 1 : 0);
-  //                               int displayTotalCount = (winnerMonth != null) ? displayPaidCount : totalMonths;
-  //
-  //                               double balance = (winnerMonth != null) ? 0.0 : (monthlyAmount * totalMonths) - totalPaidSoFar;
-  //
-  //                               return DataRow(
-  //                                 color: WidgetStateProperty.resolveWith<Color?>((states) {
-  //                                   if (hasWonInThisMonth) return Colors.amber.shade100;
-  //                                   if (wonInPast) return Colors.green.shade50;
-  //                                   return null;
-  //                                 }),
-  //                                 cells: [
-  //                                   DataCell(Text(d['kuriNumber']?.toString() ?? "-", style: const TextStyle(fontWeight: FontWeight.bold))),
-  //                                   DataCell(SizedBox(
-  //                                     width: 150,
-  //                                     child: Column(
-  //                                       crossAxisAlignment: CrossAxisAlignment.start,
-  //                                       mainAxisAlignment: MainAxisAlignment.center,
-  //                                       children: [
-  //                                         Text(d['name'].toString().toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-  //                                         Text(d['phone'] ?? "-", style: const TextStyle(fontSize: 10, color: Colors.grey)),
-  //                                       ],
-  //                                     ),
-  //                                   )),
-  //                                   DataCell(Text(d['place']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text(d['joiningMonth']?.toString() ?? "-", style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text(currencyFormat.format(monthlyAmount), style: const TextStyle(fontSize: 11))),
-  //                                   DataCell(Text("$displayPaidCount/$displayTotalCount",
-  //                                       style: TextStyle(
-  //                                         fontSize: 11,
-  //                                         fontWeight: (winnerMonth != null) ? FontWeight.bold : FontWeight.normal,
-  //                                         color: (winnerMonth != null) ? Colors.blue.shade900 : Colors.black,
-  //                                       ))),
-  //                                   DataCell(Text(currencyFormat.format(totalPaidSoFar), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-  //                                   DataCell(Text(currencyFormat.format(balance < 0 ? 0 : balance),
-  //                                       style: TextStyle(color: balance > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold, fontSize: 11))),
-  //
-  //                                   DataCell(_buildStatusBadge(hasPaymentDoc, pMonth, winnerMonth)),
-  //
-  //                                   DataCell(Padding(
-  //                                     padding: const EdgeInsets.symmetric(vertical: 4.0),
-  //                                     child: Builder(builder: (context) {
-  //                                       if (!hasPaymentDoc || pMonth == null) return const Text("-");
-  //                                       final splits = pMonth['paymentSplits'] as List?;
-  //                                       List<String> formattedDates = [];
-  //                                       if (splits != null && splits.isNotEmpty) {
-  //                                         formattedDates = splits.map((s) {
-  //                                           final splitDate = s['date'];
-  //                                           if (splitDate is Timestamp) {
-  //                                             return DateFormat('dd-MM-yy').format(splitDate.toDate());
-  //                                           }
-  //                                           return splitDate?.toString() ?? "";
-  //                                         }).where((d) => d.isNotEmpty).toSet().toList();
-  //                                       } else if (pMonth['paidDate'] is Timestamp) {
-  //                                         formattedDates = [DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate())];
-  //                                       }
-  //                                       if (formattedDates.isEmpty) return const Text("-");
-  //                                       return Column(
-  //                                         mainAxisAlignment: MainAxisAlignment.center,
-  //                                         crossAxisAlignment: CrossAxisAlignment.start,
-  //                                         children: formattedDates.map((dateStr) => Text(
-  //                                           dateStr,
-  //                                           style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.w600, height: 1.2),
-  //                                         )).toList(),
-  //                                       );
-  //                                     }),
-  //                                   )),
-  //                                   DataCell(hasPaymentDoc ? Column(
-  //                                     mainAxisAlignment: MainAxisAlignment.center,
-  //                                     crossAxisAlignment: CrossAxisAlignment.start,
-  //                                     children: [
-  //                                       Text(pMonth!['mode']?.toString() ?? "-", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.purple)),
-  //                                       if (pMonth['splitAmounts'] != null && pMonth['splitAmounts'].toString().isNotEmpty)
-  //                                         Text("₹${pMonth['splitAmounts']}", style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
-  //                                     ],
-  //                                   ) : const Text("-")),
-  //                                   DataCell(Text(hasPaymentDoc ? pMonth!['collectedBy'] ?? "-" : "-", style: const TextStyle(fontSize: 12, color: Colors.teal))),
-  //                                   DataCell(hasPaymentDoc ? Column(
-  //                                     mainAxisAlignment: MainAxisAlignment.center,
-  //                                     crossAxisAlignment: CrossAxisAlignment.start,
-  //                                     children: [
-  //                                       Text(pMonth!['addedByName']?.toString().toUpperCase() ?? "-", style: const TextStyle(fontSize:10, fontWeight: FontWeight.bold, color: Colors.brown)),
-  //                                       if (pMonth['paidAt'] != null)
-  //                                         Text(DateFormat('dd-MMM hh:mm').format((pMonth['paidAt'] as Timestamp).toDate()), style: const TextStyle(fontSize: 9, color: Colors.grey)),
-  //                                     ],
-  //                                   ) : const Text("-")),
-  //                                   DataCell(Row(
-  //                                     mainAxisSize: MainAxisSize.min,
-  //                                     children: [
-  //                                       if (wonInPast) ...[
-  //                                         const Icon(Icons.check_circle, color: Colors.green, size: 20),
-  //                                       ] else ...[
-  //                                         if (hasPaymentDoc)
-  //                                           IconButton(
-  //                                             padding: EdgeInsets.zero,
-  //                                             constraints: const BoxConstraints(),
-  //                                             icon: const Icon(Icons.edit_calendar, color: Colors.orange, size: 18),
-  //                                             onPressed: () => _showMarkPaymentDialog(
-  //                                               mid, d['name'],d['phone'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount,
-  //                                               existingPayment: pMonth,
-  //                                             ),
-  //                                           )
-  //                                         else
-  //                                           _buildPayButton(mid, d['name'],d['phone'],d['kuriNumber']?.toString() ?? "-", d['masterId'] ?? mid, monthlyAmount),
-  //
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.message_outlined, color: Colors.green, size: 18),
-  //                                           onPressed: () => _sendWhatsAppReminder(d['phone'] ?? "", d['name'] ?? "Member", balance),
-  //                                         ),
-  //
-  //                                         if (hasWonInThisMonth)
-  //                                           const Icon(Icons.stars, color: Colors.orange, size: 22)
-  //                                         else if (!anyWinnerThisMonth)
-  //                                           IconButton(
-  //                                             padding: EdgeInsets.zero,
-  //                                             constraints: const BoxConstraints(),
-  //                                             icon: Icon(Icons.emoji_events_outlined,
-  //                                                 color: isFullyPaid ? Colors.blue : Colors.grey.shade300),
-  //                                             onPressed: isFullyPaid
-  //                                                 ? () => _markAsWinner(mid, d['name'], true, pMonth)
-  //                                                 : () => ScaffoldMessenger.of(context).showSnackBar(
-  //                                                 const SnackBar(content: Text("Partial payments cannot enter the draw!"))),
-  //                                           ),
-  //                                       ],
-  //
-  //                                       if (widget.userRole == 'Super Admin' && !wonInPast) ...[
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.edit_note, color: Colors.blue, size: 20),
-  //                                           onPressed: () => _showEditEnrollmentDialog(currentMemberDoc),
-  //                                         ),
-  //                                         IconButton(
-  //                                           padding: EdgeInsets.zero,
-  //                                           constraints: const BoxConstraints(),
-  //                                           icon: const Icon(Icons.delete_forever, color: Colors.red, size: 20),
-  //                                           onPressed: () => _confirmDeleteEnrollment(m.id, d),
-  //                                         ),
-  //                                       ],
-  //                                     ],
-  //                                   )),
-  //                                 ],
-  //                               );
-  //                             }).toList(),
-  //                           ),
-  //                         ),
-  //                       ),
-  //                     ),
-  //                   ),
-  //                 ),
-  //               ),
-  //             ],
-  //           );
-  //         },
-  //       ),
-  //     ),
-  //   );
-  // }
   Widget _buildMemberTableContent() {
     if (_isLoading) return const Expanded(child: Center(child: CircularProgressIndicator()));
 
@@ -1610,7 +1023,8 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
                                 return splitDate?.toString() ?? "";
                               }).where((d) => d.isNotEmpty).toSet().toList();
                             } else if (pMonth['paidDate'] is Timestamp) {
-                              formattedDates = [DateFormat('dd-MM-yy').format((pMonth['paidDate'] as Timestamp).toDate())];
+                              formattedDates = [DateFormat('dd-MM-yy').format((pMonth[''
+                                  'paidDate'] as Timestamp).toDate())];
                             }
                             if (formattedDates.isEmpty) return const Text("-");
                             return Column(
@@ -2132,13 +1546,17 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
             String paymentStatus = (totalCollected >= monthlyAmount) ? "Fully Paid" : "Partial";
             String allCollectors = splits.map((s) => adminIdToNameMap[s['collectorId']] ?? "Unknown").toSet().join(", ");
 
+            // --- STEP 1: DETERMINISTIC ID TO PREVENT DUPLICATES ---
+            String customDocId = "${enrollmentId}_$monthKey";
+
             final data = {
+              'id': customDocId,
               'kuriId': widget.kuriId,
               'memberId': enrollmentId,
               'masterId': masterId,
-              'memberName':name,
-              'phone':phone,
-          'kuriNumber':kuriNumber,
+              'memberName': name,
+              'phone': phone,
+              'kuriNumber': kuriNumber,
               'monthKey': monthKey,
               'amount': monthlyAmount,
               'collectedTotal': totalCollected,
@@ -2158,35 +1576,30 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               'lastEditedBy': widget.userName,
             };
 
-            // --- ATOMIC BATCH UPDATE ---
+            // --- STEP 2: MAINTAIN BATCH FOR PAYMENT ---
             WriteBatch batch = FirebaseFirestore.instance.batch();
-            DocumentReference memberRef = FirebaseFirestore.instance.collection('enrollments').doc(enrollmentId);
+            DocumentReference payRef = FirebaseFirestore.instance.collection('payments').doc(customDocId);
 
             if (existingPayment != null && existingPayment.containsKey('id')) {
-              DocumentReference payRef = FirebaseFirestore.instance.collection('payments').doc(existingPayment['id']);
-
-              // Calculate difference so the totalPaid field is always accurate
-              double oldAmount = _parseNum(existingPayment['collectedTotal']);
-              double difference = totalCollected - oldAmount;
-
               batch.update(payRef, data);
-              batch.update(memberRef, {'totalPaid': FieldValue.increment(difference)});
             } else {
               data['paidAt'] = FieldValue.serverTimestamp();
               data['addedById'] = widget.userId;
               data['addedByName'] = widget.userName;
-
-              DocumentReference newPayRef = FirebaseFirestore.instance.collection('payments').doc();
-              batch.set(newPayRef, data);
-
-              // Increment the totals in the main member doc
-              batch.update(memberRef, {
-                'totalPaid': FieldValue.increment(totalCollected),
-                'paidMonthsCount': FieldValue.increment(1),
-              });
+              batch.set(payRef, data);
             }
 
+            // Commit the payment first so aggregation can see it
             await batch.commit();
+
+            // --- STEP 3: AGGREGATION SYNC (REPLACES INCREMENT) ---
+            // This fixes any "double entry" math errors from the past automatically
+            Map<String, dynamic> freshTotals = await _recalculateMemberTotals(enrollmentId);
+
+            await FirebaseFirestore.instance.collection('enrollments').doc(enrollmentId).update({
+              'totalPaid': freshTotals['totalPaid'],
+              'paidMonthsCount': freshTotals['paidMonthsCount'],
+            });
 
             if (mounted) {
               Navigator.pop(c);
@@ -2196,14 +1609,40 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
               ));
             }
           } catch (e) {
+            print(e);
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text("Error: $e"),
                 backgroundColor: Colors.red
             ));
           }
-        }, kuriNumber: kuriNumber,
+        },
+        kuriNumber: kuriNumber,
       ),
     );
+  }
+
+  Future<Map<String, dynamic>> _recalculateMemberTotals(String enrollmentId) async {
+    // 1. Create the aggregate query
+    final aggregateQuery = FirebaseFirestore.instance
+        .collection('payments')
+        .where('memberId', isEqualTo: enrollmentId);
+
+    // 2. Perform the aggregation
+    final AggregateQuerySnapshot snapshot = await aggregateQuery.aggregate(
+      sum('collectedTotal'),
+      count(),
+    ).get();
+
+    // 3. Access the values using the correct syntax
+    // Use .count for the total number of documents
+    // Use .getSum('field') for the total amount
+    int totalCount = snapshot.count ?? 0;
+    double totalSum = snapshot.getSum('collectedTotal') ?? 0.0;
+
+    return {
+      'totalPaid': totalSum,
+      'paidMonthsCount': totalCount,
+    };
   }
   Future<void> migrateOldPayments() async {
     final db = FirebaseFirestore.instance;
@@ -2362,7 +1801,70 @@ class _KuriMembersScreenState extends State<KuriMembersScreen> {
     const SizedBox(width: 4), Expanded(child: child)
   ]);
 
+  Future<void> getCollectionLog() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('payments')
+          .where('memberName', isEqualTo: 'VAIS')
+          .get();
 
+      if (snapshot.docs.isEmpty) {
+        debugPrint("No records found.");
+        return;
+      }
+
+      double totalAmount = 0;
+      StringBuffer logBuffer = StringBuffer();
+
+      // Track how many times each month appears to find duplicates
+      Map<String, int> monthCount = {};
+      for (var doc in snapshot.docs) {
+        String m = doc.data()['monthKey']?.toString() ?? "N/A";
+        monthCount[m] = (monthCount[m] ?? 0) + 1;
+      }
+
+      logBuffer.writeln("======= MEMBER PAYMENT LOG (KS AMEEN MFV) =======");
+      logBuffer.writeln("Generated on: ${DateTime.now().toString().split('.')[0]}");
+      logBuffer.writeln("--------------------------------------------------------------------------------------------");
+      logBuffer.writeln("${'DOC ID'.padRight(22)} | ${'MONTH'.padRight(8)} | ${'K.NO'.padRight(5)} | ${'AMT'} | MODE | STATUS");
+      logBuffer.writeln("--------------------------------------------------------------------------------------------");
+
+      for (var doc in snapshot.docs) {
+        final d = doc.data();
+        final String docId = doc.id;
+        final String mKey = (d['monthKey'] ?? "N/A").toString();
+
+        // Check if this month is a duplicate
+        bool isDuplicate = (monthCount[mKey] ?? 0) > 1;
+        String statusFlag = isDuplicate ? "!! DOUBLE ENTRY !!" : "OK";
+
+        double amt = _parseNum(d['amount']);
+        totalAmount += amt;
+
+        String kuriNo = (d['kuriNumber'] ?? "-").toString().padRight(5);
+        String mode = (d['mode'] ?? "-").toString().padRight(10);
+
+        logBuffer.writeln(
+            "${docId.padRight(22)} | "
+                "${mKey.padRight(8)} | "
+                "$kuriNo | "
+                "₹${amt.toInt().toString().padRight(5)} | "
+                "$mode | "
+                "$statusFlag"
+        );
+      }
+
+      logBuffer.writeln("--------------------------------------------------------------------------------------------");
+      logBuffer.writeln("TOTAL COLLECTED: ₹${totalAmount.toInt()}");
+      logBuffer.writeln("TOTAL RECORDS:   ${snapshot.docs.length}");
+      logBuffer.writeln("============================================================================================");
+
+      debugPrint(logBuffer.toString());
+
+    } catch (e) {
+      debugPrint("Log Error: $e");
+    }
+  }
 // Helper methods for the Ribbon UI
   Widget _compactItem(String label, String value, {bool isTitle = false, bool isSpecial = false}) {
     return Padding(

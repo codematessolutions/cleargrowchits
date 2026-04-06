@@ -30,40 +30,90 @@ class _CompanyGlobalAuditWebState extends State<CompanyGlobalAuditWeb> {
   static const Color textMuted = Color(0xFF6B7280);
   static const Color borderCol = Color(0xFFE5E7EB);
 
+  // Stream<Map<String, List<QueryDocumentSnapshot>>> _getGlobalData() {
+  //   Query paymentQuery = FirebaseFirestore.instance.collection('payments');
+  //   Query expenseQuery = FirebaseFirestore.instance.collection('expenses');
+  //
+  //   // Define the Start and End of the selected range
+  //   DateTime start;
+  //   DateTime end;
+  //
+  //   if (viewMode == 0) {
+  //     // Month View
+  //     start = DateTime(selectedDate.year, selectedDate.month, 1);
+  //     end = DateTime(selectedDate.year, selectedDate.month + 1, 1).subtract(const Duration(milliseconds: 1));
+  //   } else if (viewMode == 1) {
+  //     // Year View
+  //     start = DateTime(selectedDate.year, 1, 1);
+  //     end = DateTime(selectedDate.year, 12, 31, 23, 59, 59);
+  //   } else {
+  //     // Total View: Return all data without filtering
+  //     start = DateTime(2000); // Far past
+  //     end = DateTime(2100);   // Far future
+  //   }
+  //
+  //   // Apply filters ONLY if not in "Total" mode (viewMode 2)
+  //   if (viewMode != 2) {
+  //     paymentQuery = paymentQuery
+  //         .where('paidAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+  //         .where('paidAt', isLessThanOrEqualTo: Timestamp.fromDate(end));
+  //
+  //     // CRITICAL: Changed 'date' to 'expenseDate' to match your DB screenshot
+  //     expenseQuery = expenseQuery
+  //         .where('expenseDate', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+  //         .where('expenseDate', isLessThanOrEqualTo: Timestamp.fromDate(end));
+  //   }
+  //
+  //   Stream<QuerySnapshot> staffStream = FirebaseFirestore.instance.collection('staff_admins').snapshots();
+  //   Stream<QuerySnapshot> kuriMasterStream = FirebaseFirestore.instance.collection('kuris').snapshots();
+  //
+  //   return StreamZipCustom([
+  //     paymentQuery.snapshots(),
+  //     expenseQuery.snapshots(),
+  //     staffStream,
+  //     kuriMasterStream
+  //   ]).map((list) {
+  //     return {
+  //       'payments': list[0].docs,
+  //       'expenses': list[1].docs,
+  //       'staff': list[2].docs,
+  //       'kuris_master': list[3].docs,
+  //     };
+  //   });
+
+  // }
+
   Stream<Map<String, List<QueryDocumentSnapshot>>> _getGlobalData() {
     Query paymentQuery = FirebaseFirestore.instance.collection('payments');
     Query expenseQuery = FirebaseFirestore.instance.collection('expenses');
 
-    // Define the Start and End of the selected range
-    DateTime start;
-    DateTime end;
-
+    // --- NEW monthKey FILTERING LOGIC ---
     if (viewMode == 0) {
-      // Month View
-      start = DateTime(selectedDate.year, selectedDate.month, 1);
-      end = DateTime(selectedDate.year, selectedDate.month + 1, 1).subtract(const Duration(milliseconds: 1));
+      // 1. Month View: Exact match for the selected month
+      String currentMonthKey = DateFormat('yyyy_MM').format(selectedDate);
+
+      paymentQuery = paymentQuery.where('monthKey', isEqualTo: currentMonthKey);
+      expenseQuery = expenseQuery.where('monthKey', isEqualTo: currentMonthKey);
+
     } else if (viewMode == 1) {
-      // Year View
-      start = DateTime(selectedDate.year, 1, 1);
-      end = DateTime(selectedDate.year, 12, 31, 23, 59, 59);
-    } else {
-      // Total View: Return all data without filtering
-      start = DateTime(2000); // Far past
-      end = DateTime(2100);   // Far future
-    }
+      // 2. Year View: Range match from Jan to Dec of the selected year
+      String yearPrefix = DateFormat('yyyy').format(selectedDate);
+      String startKey = "${yearPrefix}_01";
+      String endKey = "${yearPrefix}_12";
 
-    // Apply filters ONLY if not in "Total" mode (viewMode 2)
-    if (viewMode != 2) {
       paymentQuery = paymentQuery
-          .where('paidDate', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-          .where('paidDate', isLessThanOrEqualTo: Timestamp.fromDate(end));
+          .where('monthKey', isGreaterThanOrEqualTo: startKey)
+          .where('monthKey', isLessThanOrEqualTo: endKey);
 
-      // CRITICAL: Changed 'date' to 'expenseDate' to match your DB screenshot
       expenseQuery = expenseQuery
-          .where('expenseDate', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-          .where('expenseDate', isLessThanOrEqualTo: Timestamp.fromDate(end));
+          .where('monthKey', isGreaterThanOrEqualTo: startKey)
+          .where('monthKey', isLessThanOrEqualTo: endKey);
+
+    } else {
+      // 3. Total View: No filters applied (Existing logic preserved)
     }
 
+    // --- REMAINING EXISTING LOGIC (UNTOUCHED) ---
     Stream<QuerySnapshot> staffStream = FirebaseFirestore.instance.collection('staff_admins').snapshots();
     Stream<QuerySnapshot> kuriMasterStream = FirebaseFirestore.instance.collection('kuris').snapshots();
 
